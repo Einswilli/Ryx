@@ -1,0 +1,90 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# pyproject.toml — Ryx ORM build configuration
+#
+# We use maturin as the PEP 517 build backend. Maturin handles:
+#   - Compiling the Rust crate into a Python extension (.so / .pyd)
+#   - Packaging the Python source files alongside the compiled extension
+#   - Publishing wheels to PyPI
+#
+# To get started:
+#   pip install maturin
+#   maturin develop          # installs the package in-place (dev mode)
+#   maturin build --release  # produces a release wheel
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ryx"
+version = "0.1.2"
+description = "A Django-style Python ORM powered by sqlx (Rust) via PyO3."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "AGPL-3.0"}
+keywords = ["ORM", "Django", "sqlx", "database", "python", "performance", "rust"]
+authors = [
+    {name = "Wilfried Goeh", email = "einswilligoeh@email.com"},
+    {name = "AllDotPy", email = "hello@alldotpy.com"}
+]
+maintainers = [{ name = "#Einswilli", email = "einswilligoeh@email.com" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: WSGI :: Server",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+
+]
+
+[project.urls]
+Homepage = "https://github.com/AllDotPy/Ryx"
+Documentation = "https://github.com/AllDotPy/Ryx#readme"
+Repository = "https://github.com/AllDotPy/Ryx"
+Issues = "https://github.com/AllDotPy/Ryx/issues"
+
+[project.scripts]
+ryx = "ryx._cli:main"
+
+[tool.maturin]
+python-source = "."
+module-name = "ryx._ryx"
+bindings = "pyo3"
+packages = ["ryx"]
+# compatibility = "manylinux2014"
+
+[tool.maturin.target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-s",] # "--interpreter python3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[dependency-groups]
+dev = [
+    "maturin>=1.12.6",
+    "pytest>=9.0.2",
+]
+
+[project.optional-dependencies]
+dev  = ["pytest>=8", "pytest-asyncio>=0.23"]
