@@ -36,13 +36,13 @@ sqlite = ["sqlx/sqlite"]
 # "extension-module" is required when building a cdylib for Python import.
 # Without it, PyO3 tries to link against libpython, which breaks on Linux/macOS
 # when Python dynamically loads the extension.
-pyo3 = { version = "0.27.2", features = ["extension-module"] }
+pyo3 = { version = "0.28.3", features = ["extension-module"] }
 
 # ── Async bridge ──────────────────────────────────────────────────────────────
 # pyo3-async-runtimes is the maintained successor of the abandoned pyo3-asyncio.
 # The "tokio-runtime" feature wires Rust Futures into Python's asyncio event
 # loop via tokio — users simply `await` our ORM calls from Python.
-pyo3-async-runtimes = { version = "0.27", features = ["attributes", "async-std-runtime", "tokio-runtime"] }
+pyo3-async-runtimes = { version = "0.28.0", features = ["attributes", "async-std-runtime", "tokio-runtime"] }
 
 # ── sqlx ──────────────────────────────────────────────────────────────────────
 # We use sqlx 0.8.x (stable). The "runtime-tokio" feature is mandatory since
