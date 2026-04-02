@@ -1,5 +1,5 @@
 //
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 // Ryx — Query Abstract Syntax Tree (AST)
 //
 // Supports the full range of QuerySet features, including filters, joins, aggregates:
@@ -8,13 +8,13 @@
 //   - Added QNode          (boolean algebra: AND / OR / NOT trees)
 //   - SqlValue::Subquery   (for EXISTS / IN subquery expressions)
 //   - QueryNode gets: joins, group_by, having, annotations, q_filter
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 
 use serde::{Deserialize, Serialize};
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 // SqlValue — a Python-safe, DB-bindable value
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 
 /// Every value that can appear as a SQL bind parameter.
 ///
@@ -46,7 +46,7 @@ impl SqlValue {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ##
 // QNode — boolean filter tree (enables OR / NOT)
 //
 // Django-style Q objects: Q(active=True) | Q(views__gte=100)
@@ -54,7 +54,7 @@ impl SqlValue {
 // The Python side builds a QNode tree by calling Python Q() constructors and
 // combining them with | and &.  The Python layer serialises the tree to a
 // nested structure and passes it to Rust as a QNode.
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 
 /// A recursive boolean tree of filter conditions.
 ///
@@ -128,13 +128,13 @@ pub struct JoinClause {
     pub on_right: String,
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 // AggregateExpr — column-level aggregation annotations
 //
 // Used for:
 //   Post.objects.annotate(total_views=Sum("views"))
 //   Post.objects.aggregate(avg_views=Avg("views"))
-// ──────────────────────────────────────────────────────────────────────────────
+// ###
 
 /// The SQL aggregate function to apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
