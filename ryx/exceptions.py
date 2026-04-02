@@ -10,6 +10,7 @@
 # Python layer re-wraps into these typed exceptions where appropriate.
 # 
 
+from typing import Any
 
 ####
 ##     BASE RYX EXCEPTION 
@@ -85,8 +86,44 @@ class FieldError(RyxError):
 ##     RYX VALIDATION ERROR 
 #####
 class ValidationError(RyxError):
-    """Raised when a model instance fails field validation.
+    """Raised when field or model validation fails.
 
-    Not yet implemented — reserved for a future version that adds
-    per-field validators (max_length, min_value, etc.).
+    Attributes:
+        errors: dict mapping field names (or ``"__all__"`` for non-field errors)
+                to a list of error message strings.
+
+    Example::
+
+        raise ValidationError({"title": ["Too short", "Must start with uppercase"]})
+        raise ValidationError({"__all__": ["Event dates overlap"]})
+
+    Or for a single non-field error::
+
+        raise ValidationError("Something went wrong")
     """
+
+    def __init__(self, errors: Any) -> None:
+        if isinstance(errors, str):
+            # Convenience: a plain string is treated as a non-field error.
+            self.errors: dict[str, list[str]] = {"__all__": [errors]}
+        elif isinstance(errors, list):
+            self.errors = {"__all__": [str(e) for e in errors]}
+        elif isinstance(errors, dict):
+            # Normalise values to list[str].
+            self.errors = {
+                field: [str(msg)] if isinstance(msg, str) else [str(m) for m in msg]
+                for field, msg in errors.items()
+            }
+        else:
+            self.errors = {"__all__": [str(errors)]}
+
+        super().__init__(str(self.errors))
+
+    def merge(self, other: "ValidationError") -> "ValidationError":
+        """Merge another ValidationError into this one and return self."""
+        for field, msgs in other.errors.items():
+            self.errors.setdefault(field, []).extend(msgs)
+        return self
+
+    def __repr__(self) -> str:
+        return f"ValidationError({self.errors!r})"
