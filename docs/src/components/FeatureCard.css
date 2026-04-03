@@ -1,0 +1,64 @@
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.feature-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.25rem;
+  border-radius: 12px;
+  border: 1px solid var(--ryx-border);
+  background: var(--ryx-bg-card);
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ryx-accent), var(--ryx-accent-light));
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.feature-card:hover {
+  border-color: var(--ryx-accent);
+  box-shadow: 0 4px 20px var(--ryx-accent-glow);
+  transform: translateY(-3px);
+}
+
+.feature-card:hover::before {
+  opacity: 1;
+}
+
+.feature-card__icon {
+  font-size: 1.8rem;
+  line-height: 1;
+  margin-bottom: 0.25rem;
+}
+
+.feature-card__title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ryx-text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.feature-card__desc {
+  font-size: 0.85rem;
+  color: var(--ryx-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
