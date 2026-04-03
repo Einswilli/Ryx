@@ -1,0 +1,103 @@
+---
+sidebar_position: 6
+---
+
+# Values & Annotate
+
+Control the shape of your query results with `values()` and `annotate()`.
+
+## values() — Dict Results
+
+Instead of returning Model instances, return dictionaries:
+
+```python
+posts = await Post.objects.values("title", "views")
+# → [{"title": "Hello", "views": 100}, {"title": "World", "views": 200}]
+
+# All fields as dicts
+all_dicts = await Post.objects.values()
+```
+
+## values_list() — Tuple Results
+
+```python
+titles = await Post.objects.values_list("title", flat=True)
+# → ["Hello", "World", "Foo"]
+
+pairs = await Post.objects.values_list("title", "views")
+# → [("Hello", 100), ("World", 200)]
+```
+
+## annotate() — Computed Fields
+
+Add calculated columns to each result row:
+
+```python
+posts = await Post.objects.annotate(
+    comment_count=Count("comments.id"),
+    is_popular=Case(
+        When(views__gte=1000, then=True),
+        default=False,
+    ),
+)
+
+print(posts[0]["comment_count"])  # Access annotated field
+```
+
+## values() + annotate() = GROUP BY
+
+The most powerful pattern — group by one or more fields:
+
+```python
+# Posts per author with stats
+await (
+    Post.objects
+        .values("author_id")
+        .annotate(posts=Count("id"), total_views=Sum("views"))
+        .order_by("-total_views")
+)
+# → [
+#     {"author_id": 1, "posts": 15, "total_views": 5000},
+#     {"author_id": 2, "posts": 8, "total_views": 3200},
+#   ]
+```
+
+## Multiple Group By Fields
+
+```python
+# Posts per author per month
+await (
+    Post.objects
+        .values("author_id", "status")
+        .annotate(count=Count("id"))
+)
+# → [
+#     {"author_id": 1, "status": "published", "count": 10},
+#     {"author_id": 1, "status": "draft", "count": 3},
+#   ]
+```
+
+## Filtering Groups with exclude()
+
+```python
+# Authors with more than 5 posts
+await (
+    Post.objects
+        .values("author_id")
+        .annotate(count=Count("id"))
+        .filter(count__gt=5)
+)
+```
+
+This generates a `HAVING` clause:
+
+```sql
+SELECT "author_id", COUNT("id") AS "count"
+FROM "posts"
+GROUP BY "author_id"
+HAVING COUNT("id") > 5
+```
+
+## Next Steps
+
+→ **[Relationships](/relationships/foreign-key)** — Work with related models

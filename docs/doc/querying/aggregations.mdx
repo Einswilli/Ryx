@@ -1,0 +1,106 @@
+---
+sidebar_position: 5
+---
+
+# Aggregations
+
+Compute summary values across your data with `aggregate()` and `annotate()`.
+
+## Aggregate Functions
+
+| Function | Description | SQL |
+|---|---|---|
+| `Count("field")` | Count rows | `COUNT(field)` |
+| `Sum("field")` | Sum values | `SUM(field)` |
+| `Avg("field")` | Average | `AVG(field)` |
+| `Min("field")` | Minimum | `MIN(field)` |
+| `Max("field")` | Maximum | `MAX(field)` |
+| `RawAgg("SQL")` | Custom SQL | Raw expression |
+
+## aggregate() — Single Result
+
+Returns a single dictionary with computed values:
+
+```python
+from ryx import Count, Sum, Avg, Min, Max
+
+stats = await Post.objects.aggregate(
+    total_posts=Count("id"),
+    total_views=Sum("views"),
+    avg_views=Avg("views"),
+    top_views=Max("views"),
+    min_views=Min("views"),
+)
+
+print(stats)
+# → {
+#     'total_posts': 150,
+#     'total_views': 45000,
+#     'avg_views': 300.0,
+#     'top_views': 5000,
+#     'min_views': 0,
+#   }
+```
+
+## annotate() — Per-Row Values
+
+Adds computed fields to each row in the result:
+
+```python
+posts = await Post.objects.annotate(
+    comment_count=Count("comments.id"),
+    avg_rating=Avg("ratings.score"),
+)
+
+for post in posts:
+    print(f"{post.title}: {post['comment_count']} comments")
+```
+
+## values() + annotate() = GROUP BY
+
+Combine `values()` with `annotate()` for grouped aggregations:
+
+```python
+# Posts per author
+by_author = await (
+    Post.objects
+        .values("author_id")
+        .annotate(post_count=Count("id"), total_views=Sum("views"))
+)
+
+for row in by_author:
+    print(f"Author {row['author_id']}: {row['post_count']} posts, {row['total_views']} views")
+```
+
+This generates:
+
+```sql
+SELECT "author_id", COUNT("id") AS "post_count", SUM("views") AS "total_views"
+FROM "posts"
+GROUP BY "author_id"
+```
+
+## Distinct Aggregations
+
+```python
+# Count unique authors
+unique_authors = await Post.objects.aggregate(
+    authors=Count("author_id", distinct=True),
+)
+```
+
+## Raw Aggregations
+
+For database-specific functions:
+
+```python
+from ryx import RawAgg
+
+result = await Post.objects.aggregate(
+    percentile=RawAgg("PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY views)"),
+)
+```
+
+## Next Steps
+
+→ **[Values & Annotate](./values-and-annotate)** — Advanced GROUP BY patterns

@@ -1,0 +1,104 @@
+---
+sidebar_position: 3
+---
+
+# Q Objects
+
+Q objects let you build complex boolean expressions — `OR`, `NOT`, and nested combinations.
+
+## The Problem
+
+By default, filter kwargs are `AND`-ed together:
+
+```python
+# WHERE active = true AND views > 100
+Post.objects.filter(active=True, views__gt=100)
+```
+
+But what about `OR`? That's where Q objects come in.
+
+## Basic Q Objects
+
+```python
+from ryx import Q
+
+# WHERE active = true OR views >= 1000
+Post.objects.filter(Q(active=True) | Q(views__gte=1000))
+```
+
+## Operators
+
+| Operator | Meaning | Example |
+|---|---|---|
+| `\|` | OR | `Q(active=True) \| Q(featured=True)` |
+| `&` | AND | `Q(active=True) & Q(views__gte=100)` |
+| `~` | NOT | `~Q(status="draft")` |
+
+## Complex Nesting
+
+```python
+# (active AND views >= 100) OR featured
+Post.objects.filter(
+    (Q(active=True) & Q(views__gte=100)) | Q(featured=True)
+)
+
+# NOT (draft OR archived)
+Post.objects.filter(~Q(Q(status="draft") | Q(status="archived")))
+```
+
+## Mixing Q and Kwargs
+
+Kwargs are `AND`-ed with the Q expression:
+
+```python
+# (active = true OR views >= 100) AND author_id = 5
+Post.objects.filter(
+    Q(active=True) | Q(views__gte=100),
+    author_id=5
+)
+```
+
+## Negation
+
+```python
+# NOT active
+Post.objects.filter(~Q(active=True))
+
+# Equivalent to exclude
+Post.objects.exclude(active=True)
+```
+
+## Real-World Example
+
+```python
+# Find posts that are either:
+#   - Active and popular (views >= 500)
+#   - Featured (regardless of views)
+#   - But NOT drafts
+posts = await Post.objects.filter(
+    (Q(active=True) & Q(views__gte=500)) | Q(featured=True),
+    ~Q(status="draft"),
+)
+```
+
+## How Q Objects Work Under the Hood
+
+Q objects build a tree structure that the Rust compiler traverses:
+
+```
+        OR
+       /  \
+     AND   featured=True
+    /   \
+active  views >= 500
+```
+
+This tree is compiled to SQL:
+
+```sql
+WHERE ("active" = ? AND "views" >= ?) OR "featured" = ?
+```
+
+## Next Steps
+
+→ **[Ordering & Pagination](./ordering-and-pagination)** — Sort and paginate results
