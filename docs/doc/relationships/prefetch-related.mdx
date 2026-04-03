@@ -1,0 +1,63 @@
+---
+sidebar_position: 6
+---
+
+# prefetch_related
+
+`prefetch_related` solves the N+1 problem for ManyToMany and reverse FK relationships using two queries instead of a JOIN.
+
+## The Problem
+
+```python
+# N+1 queries!
+authors = await Author.objects.all()
+for author in authors:
+    posts = await author.posts.all()  # Query per author!
+```
+
+## The Solution
+
+```python
+from ryx.relations import apply_prefetch_related
+
+# 2 queries total
+authors = await Author.objects.all()
+authors = await apply_prefetch_related(authors, fields=["posts"])
+
+for author in authors:
+    posts = await author.posts.all()  # Cached, no query
+```
+
+## How It Works
+
+Instead of a JOIN, `prefetch_related` does two queries:
+
+```sql
+-- Query 1: Get all authors
+SELECT * FROM "authors"
+
+-- Query 2: Get all posts for those authors
+SELECT * FROM "posts" WHERE "author_id" IN (1, 2, 3, 4, 5)
+```
+
+The results are then matched in Python and cached on each instance.
+
+## select_related vs prefetch_related
+
+| | `select_related` | `prefetch_related` |
+|---|---|---|
+| **Strategy** | JOIN | Two queries + IN |
+| **Best for** | ForeignKey, OneToOne | ManyToMany, reverse FK |
+| **Queries** | 1 | 2 |
+| **Memory** | Higher (denormalized rows) | Lower (normalized) |
+
+## Multiple Relations
+
+```python
+posts = await Post.objects.filter(active=True)
+posts = await apply_prefetch_related(posts, fields=["author", "tags"])
+```
+
+## Next Steps
+
+→ **[CRUD](/crud/creating)** — Create, read, update, delete

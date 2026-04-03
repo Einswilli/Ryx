@@ -1,0 +1,69 @@
+---
+sidebar_position: 5
+---
+
+# select_related
+
+`select_related` solves the N+1 query problem by fetching related objects in a single JOIN query.
+
+## The Problem
+
+```python
+# N+1 queries!
+posts = await Post.objects.filter(active=True)
+for post in posts:
+    print(post.author.name)  # Each access triggers a new query
+```
+
+## The Solution
+
+```python
+from ryx.relations import apply_select_related
+
+# Single query with JOIN
+posts = await Post.objects.filter(active=True)
+posts = await apply_select_related(posts, fields=["author"])
+
+for post in posts:
+    print(post.author.name)  # No extra queries
+```
+
+## How It Works
+
+`select_related` reconstructs the query with `LEFT JOIN`:
+
+```sql
+-- Without select_related
+SELECT * FROM "posts" WHERE "active" = ?
+
+-- With select_related(["author"])
+SELECT "posts".*, "authors".* FROM "posts"
+LEFT JOIN "authors" ON "posts"."author_id" = "authors"."id"
+WHERE "posts"."active" = ?
+```
+
+The Rust executor decodes the joined rows and reconstructs full model instances with related objects attached.
+
+## Multiple Relations
+
+```python
+posts = await Post.objects.filter(active=True)
+posts = await apply_select_related(posts, fields=["author", "category"])
+```
+
+## When to Use select_related
+
+- **ForeignKey** relationships — Always works
+- **OneToOne** relationships — Always works
+- When you **know** you'll access the related object
+- When the related table is **small** (JOINs are cheap)
+
+## When NOT to Use select_related
+
+- **ManyToMany** relationships — Use `prefetch_related` instead
+- When you **won't** access the related object (wasted JOIN)
+- When the related table is **huge** (JOINs are expensive)
+
+## Next Steps
+
+→ **[prefetch_related](./prefetch-related)** — Eager loading for M2M

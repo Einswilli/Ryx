@@ -1,0 +1,87 @@
+---
+sidebar_position: 4
+---
+
+# ManyToMany
+
+A ManyToMany field creates a many-to-many relationship via a join table.
+
+## Defining ManyToMany
+
+```python
+class Post(Model):
+    title = CharField(max_length=200)
+
+class Tag(Model):
+    name  = CharField(max_length=50)
+    posts = ManyToManyField(Post)
+```
+
+Ryx automatically creates a join table `tag_posts` with columns `tag_id` and `post_id`.
+
+## Custom Join Table
+
+Specify your own through model for extra fields:
+
+```python
+class Post(Model):
+    title = CharField(max_length=200)
+
+class Tag(Model):
+    name  = CharField(max_length=50)
+    posts = ManyToManyField(Post, through="PostTag")
+
+class PostTag(Model):
+    post     = ForeignKey(Post, on_delete="CASCADE")
+    tag      = ForeignKey(Tag, on_delete="CASCADE")
+    added_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("post_id", "tag_id")]
+```
+
+## Managing Relations
+
+```python
+# Get the manager
+tag = await Tag.objects.get(pk=1)
+manager = tag.posts  # ManyToManyManager
+
+# All related posts
+posts = await tag.posts.all()
+
+# Add a relation
+await tag.posts.add(post_id=5)
+
+# Remove a relation
+await tag.posts.remove(post_id=5)
+
+# Replace all relations
+await tag.posts.set([1, 2, 3])
+
+# Clear all relations
+await tag.posts.clear()
+
+# Count
+count = await tag.posts.count()
+
+# Check existence
+exists = await tag.posts.filter(active=True).exists()
+```
+
+## Querying Through M2M
+
+```python
+# Posts with a specific tag
+Post.objects.filter(tags__name="python")
+
+# Tags for a specific post
+Tag.objects.filter(posts__id=5)
+
+# Posts with ANY of these tags
+Post.objects.filter(tags__name__in=["python", "rust"])
+```
+
+## Next Steps
+
+→ **[select_related](./select-related)** — Eager loading with JOINs
