@@ -1,0 +1,58 @@
+---
+sidebar_position: 3
+---
+
+# OneToOne
+
+A OneToOne field is a ForeignKey with a `UNIQUE` constraint — each row on one side relates to exactly one row on the other.
+
+## Defining a OneToOne
+
+```python
+class User(Model):
+    username = CharField(max_length=100, unique=True)
+    email    = CharField(max_length=254, unique=True)
+
+class Profile(Model):
+    user     = OneToOneField(User, on_delete="CASCADE")
+    bio      = CharField(max_length=500, null=True, blank=True)
+    avatar   = CharField(max_length=500, null=True, blank=True)
+```
+
+This creates a `user_id` column with both a foreign key and a unique constraint.
+
+## When to Use OneToOne
+
+- **Extending a built-in model** — Add fields to a model you can't modify
+- **Splitting large tables** — Keep frequently-accessed fields separate from rarely-used ones
+- **Inheritance-like patterns** — Model subtypes without actual inheritance
+
+```python
+# Base user data (frequently queried)
+class User(Model):
+    username = CharField(max_length=100)
+    password = CharField(max_length=255)
+
+# Extended profile (rarely queried)
+class Profile(Model):
+    user     = OneToOneField(User, on_delete="CASCADE")
+    bio      = CharField(max_length=500, null=True)
+    website  = CharField(max_length=200, null=True)
+    location = CharField(max_length=100, null=True)
+```
+
+## Accessing Related Objects
+
+```python
+# User → Profile
+user = await User.objects.get(pk=1)
+profile = await Profile.objects.get(user_id=user.pk)
+
+# Profile → User
+profile = await Profile.objects.get(pk=1)
+print(profile.user.username)  # Forward descriptor (lazy-loaded)
+```
+
+## Next Steps
+
+→ **[ManyToMany](./many-to-many)** — Many-to-many relationships
