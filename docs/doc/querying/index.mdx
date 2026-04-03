@@ -1,0 +1,34 @@
+---
+sidebar_position: 1
+---
+
+# Querying
+
+Master Ryx's powerful QuerySet API for filtering, ordering, and aggregating data.
+
+## What You'll Learn
+
+- **[Filtering](./filtering)** — Lookups, comparisons, string matching
+- **[Q Objects](./q-objects)** — OR, NOT, and complex boolean expressions
+- **[Ordering & Pagination](./ordering-and-pagination)** — Sort, limit, offset, slice
+- **[Aggregations](./aggregations)** — Count, Sum, Avg, Min, Max
+- **[Values & Annotate](./values-and-annotate)** — GROUP BY patterns and extra fields
+
+## Quick Reference
+
+```python
+# Filter
+Post.objects.filter(active=True, views__gte=100)
+
+# Q objects (OR / NOT)
+Post.objects.filter(Q(active=True) | Q(views__gte=1000))
+
+# Chain
+Post.objects.filter(active=True).order_by("-views").limit(10).offset(20)
+
+# Aggregate
+Post.objects.aggregate(total=Count("id"), avg=Avg("views"))
+
+# Annotate (GROUP BY)
+Post.objects.values("author_id").annotate(count=Count("id"))
+```
