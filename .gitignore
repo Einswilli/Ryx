@@ -222,7 +222,7 @@ target
 **/mutants.out*/
 
 # Readme (Not ready yet)
-README.md
+# README.md
 
 # Local configuration file for tests
 *.sqlite3
