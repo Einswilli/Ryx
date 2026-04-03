@@ -1,0 +1,33 @@
+---
+sidebar_position: 1
+---
+
+# Relationships
+
+Ryx supports the three classic database relationships.
+
+## What You'll Learn
+
+- **[ForeignKey](./foreign-key)** — Many-to-one relationships
+- **[OneToOne](./one-to-one)** — One-to-one relationships
+- **[ManyToMany](./many-to-many)** — Many-to-many with join tables
+- **[select_related](./select-related)** — Eager loading with JOINs
+- **[prefetch_related](./prefetch-related)** — Eager loading with IN queries
+
+## Quick Overview
+
+```python
+class Author(Model):
+    name = CharField(max_length=100)
+
+class Post(Model):
+    title  = CharField(max_length=200)
+    author = ForeignKey(Author, on_delete="CASCADE")  # Many-to-one
+
+class Profile(Model):
+    user   = OneToOneField(User)                      # One-to-one
+
+class Tag(Model):
+    name   = CharField(max_length=50)
+    posts  = ManyToManyField(Post)                    # Many-to-many
+```
