@@ -3,7 +3,7 @@ services:
     build: .
     container_name: ryx-docs
     ports:
-      - "2027:80"
+      - "2027:2027"
     restart: always
     logging:
       driver: "json-file"
