@@ -1,0 +1,22 @@
+.code-block-wrapper {
+  margin: 1.25rem 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--ryx-border);
+}
+
+.code-block-title {
+  background: var(--ryx-bg-tertiary);
+  color: var(--ryx-text-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--ryx-border);
+  letter-spacing: 0.02em;
+}
+
+.code-block-wrapper pre {
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
