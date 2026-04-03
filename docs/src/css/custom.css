@@ -1,0 +1,578 @@
+/* ==========================================================================
+   RYX ORM — Custom Docusaurus Styles
+   True dark mode, modern animations, professional design
+   ========================================================================== */
+
+/* ── Color Variables ─────────────────────────────────────────────────────── */
+
+:root {
+  /* Light mode — clean, minimal */
+  --ryx-bg-primary: #ffffff;
+  --ryx-bg-secondary: #f8f9fa;
+  --ryx-bg-tertiary: #f1f3f5;
+  --ryx-bg-card: #ffffff;
+  --ryx-bg-code: #f6f8fa;
+  --ryx-text-primary: #1a1a2e;
+  --ryx-text-secondary: #495057;
+  --ryx-text-muted: #868e96;
+  --ryx-accent: #6c5ce7;
+  --ryx-accent-light: #a29bfe;
+  --ryx-accent-glow: rgba(108, 92, 231, 0.15);
+  --ryx-border: #e9ecef;
+  --ryx-border-strong: #dee2e6;
+  --ryx-success: #00b894;
+  --ryx-warning: #fdcb6e;
+  --ryx-danger: #e17055;
+  --ryx-info: #74b9ff;
+
+  /* Navbar */
+  --ifm-navbar-background-color: rgba(255, 255, 255, 0.8);
+  --ifm-navbar-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  /* Sidebar */
+  --ifm-menu-color-background-hover: rgba(108, 92, 231, 0.06);
+  --ifm-menu-color-background-active: rgba(108, 92, 231, 0.1);
+  --ifm-menu-color-active: var(--ryx-accent);
+
+  /* Code */
+  --ifm-code-background: var(--ryx-bg-code);
+  --ifm-font-family-monospace: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+
+  /* DocSearch */
+  --docsearch-searchbox-background: var(--ryx-bg-tertiary);
+  --docsearch-searchbox-focus-background: var(--ryx-bg-secondary);
+
+  /* Footer */
+  --ifm-footer-background-color: #1a1a2e;
+  --ifm-footer-color: #adb5bd;
+  --ifm-footer-link-color: #ced4da;
+  --ifm-footer-title-color: #ffffff;
+}
+
+/* ── Dark Mode — True Dark ───────────────────────────────────────────────── */
+
+html[data-theme='dark'] {
+  --ryx-bg-primary: #0a0a0f;
+  --ryx-bg-secondary: #111118;
+  --ryx-bg-tertiary: #16161f;
+  --ryx-bg-card: #14141c;
+  --ryx-bg-code: #1a1a25;
+  --ryx-text-primary: #e8e8ed;
+  --ryx-text-secondary: #a0a0b0;
+  --ryx-text-muted: #6b6b80;
+  --ryx-accent: #a29bfe;
+  --ryx-accent-light: #c4bfff;
+  --ryx-accent-glow: rgba(162, 155, 254, 0.12);
+  --ryx-border: #1e1e2a;
+  --ryx-border-strong: #2a2a3a;
+  --ryx-success: #55efc4;
+  --ryx-warning: #ffeaa7;
+  --ryx-danger: #fab1a0;
+  --ryx-info: #a8d8ff;
+
+  /* Docusaurus overrides */
+  --ifm-background-color: var(--ryx-bg-primary);
+  --ifm-background-surface-color: var(--ryx-bg-secondary);
+  --ifm-navbar-background-color: rgba(10, 10, 15, 0.85);
+  --ifm-navbar-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --ifm-menu-color-background-hover: rgba(162, 155, 254, 0.08);
+  --ifm-menu-color-background-active: rgba(162, 155, 254, 0.12);
+  --ifm-menu-color-active: var(--ryx-accent);
+  --ifm-code-background: var(--ryx-bg-code);
+  --ifm-toc-border-color: var(--ryx-border);
+  --ifm-color-emphasis-300: var(--ryx-border);
+
+  /* DocSearch dark */
+  --docsearch-searchbox-background: var(--ryx-bg-tertiary);
+  --docsearch-searchbox-focus-background: var(--ryx-bg-secondary);
+  --docsearch-modal-background: var(--ryx-bg-secondary);
+  --docsearch-footer-background: var(--ryx-bg-tertiary);
+  --docsearch-key-gradient: linear-gradient(180deg, #1e1e2a, #16161f);
+  --docsearch-key-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --docsearch-muted-color: var(--ryx-text-muted);
+  --docsearch-highlight-color: var(--ryx-accent);
+  --docsearch-hit-background: var(--ryx-bg-card);
+  --docsearch-hit-color: var(--ryx-text-primary);
+  --docsearch-hit-active-color: #ffffff;
+  --docsearch-hit-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+
+  /* Footer dark */
+  --ifm-footer-background-color: #08080d;
+  --ifm-footer-color: var(--ryx-text-muted);
+  --ifm-footer-link-color: var(--ryx-text-secondary);
+  --ifm-footer-title-color: var(--ryx-text-primary);
+}
+
+/* ── Global ──────────────────────────────────────────────────────────────── */
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--ryx-bg-primary);
+  color: var(--ryx-text-primary);
+}
+
+/* ── Navbar ──────────────────────────────────────────────────────────────── */
+
+.navbar {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border-bottom: 1px solid var(--ryx-border);
+  transition: all 0.3s ease;
+}
+
+.navbar__title {
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--ryx-accent), var(--ryx-accent-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.navbar__logo {
+  transition: transform 0.3s ease;
+}
+
+.navbar__logo:hover {
+  transform: rotate(-8deg) scale(1.1);
+}
+
+.navbar__item {
+  font-weight: 500;
+  font-size: 0.9rem;
+  letter-spacing: 0.01em;
+  transition: color 0.2s ease;
+}
+
+/* ── Search ──────────────────────────────────────────────────────────────── */
+
+.DocSearch-Button {
+  border-radius: 10px !important;
+  border: 1px solid var(--ryx-border) !important;
+  background: var(--ryx-bg-tertiary) !important;
+  transition: all 0.25s ease !important;
+  box-shadow: none !important;
+}
+
+.DocSearch-Button:hover {
+  border-color: var(--ryx-accent) !important;
+  box-shadow: 0 0 0 3px var(--ryx-accent-glow) !important;
+  background: var(--ryx-bg-secondary) !important;
+}
+
+.DocSearch-Button-Placeholder {
+  color: var(--ryx-text-muted) !important;
+  font-size: 0.85rem !important;
+}
+
+.DocSearch-Button-Keys {
+  min-width: 0 !important;
+}
+
+.DocSearch-Button-Key {
+  background: var(--ryx-bg-card) !important;
+  border: 1px solid var(--ryx-border-strong) !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+  color: var(--ryx-text-muted) !important;
+  font-size: 0.7rem !important;
+  padding: 1px 5px !important;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+.menu {
+  padding: 0.75rem 0 !important;
+  font-size: 0.875rem;
+}
+
+.menu__link {
+  border-radius: 6px;
+  margin: 1px 8px;
+  padding: 6px 12px;
+  font-weight: 450;
+  transition: all 0.15s ease;
+  color: var(--ryx-text-secondary);
+}
+
+.menu__link:hover {
+  background: var(--ifm-menu-color-background-hover);
+  color: var(--ryx-text-primary);
+}
+
+.menu__link--active {
+  font-weight: 600;
+  color: var(--ifm-menu-color-active) !important;
+  background: var(--ifm-menu-color-background-active) !important;
+}
+
+.menu__list-item-collapsible {
+  border-radius: 6px;
+  margin: 1px 8px;
+}
+
+.menu__list-item-collapsible:hover {
+  background: var(--ifm-menu-color-background-hover);
+}
+
+.menu__caret {
+  padding: 6px;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+
+.menu__list-item-collapsible:hover .menu__caret {
+  opacity: 0.8;
+}
+
+/* Category labels */
+.menu__list-item .menu__link--sublist {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ryx-text-muted);
+}
+
+.menu__list-item .menu__link--sublist:hover {
+  color: var(--ryx-text-primary);
+}
+
+/* ── Headings ────────────────────────────────────────────────────────────── */
+
+.markdown h1 {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  background: linear-gradient(135deg, var(--ryx-text-primary) 0%, var(--ryx-accent-light) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 1.5rem;
+}
+
+.markdown h2 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: var(--ryx-text-primary);
+  border-bottom: 1px solid var(--ryx-border);
+  padding-bottom: 0.5rem;
+  margin-top: 2.5rem;
+}
+
+.markdown h3 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ryx-text-primary);
+}
+
+.markdown h4 {
+  font-weight: 600;
+  color: var(--ryx-accent);
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--ryx-border);
+  font-size: 0.875rem;
+  width: 100%;
+  display: table !important;
+  table-layout: auto;
+}
+
+/* Ensure table wrapper is full width */
+.markdown table {
+  width: 100%;
+}
+
+.markdown .table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+thead {
+  background: var(--ryx-bg-tertiary);
+}
+
+th {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ryx-text-muted);
+  border-bottom: 1px solid var(--ryx-border) !important;
+  padding: 12px 16px;
+}
+
+td {
+  border-top: 1px solid var(--ryx-border) !important;
+  border-right: none !important;
+  border-left: none !important;
+  border-bottom: none !important;
+  padding: 10px 16px;
+}
+
+tbody tr {
+  transition: background 0.15s ease;
+}
+
+tbody tr:hover {
+  background: var(--ryx-accent-glow);
+}
+
+/* ── Code Blocks ─────────────────────────────────────────────────────────── */
+
+pre {
+  border-radius: 12px !important;
+  border: 1px solid var(--ryx-border) !important;
+  background: var(--ryx-bg-code) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  font-size: 0.85em;
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: var(--ryx-bg-code);
+  border: 1px solid var(--ryx-border);
+}
+
+pre code {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+/* ── Admonitions / Callouts ──────────────────────────────────────────────── */
+
+.theme-admonition {
+  border-radius: 10px;
+  border: 1px solid;
+  box-shadow: none;
+}
+
+.theme-admonition-info {
+  --ifm-alert-background-color: rgba(116, 185, 255, 0.08);
+  --ifm-alert-border-color: var(--ryx-info);
+  --ifm-alert-background-color-highlight: rgba(116, 185, 255, 0.15);
+}
+
+.theme-admonition-tip {
+  --ifm-alert-background-color: rgba(0, 184, 148, 0.08);
+  --ifm-alert-border-color: var(--ryx-success);
+  --ifm-alert-background-color-highlight: rgba(0, 184, 148, 0.15);
+}
+
+.theme-admonition-warning {
+  --ifm-alert-background-color: rgba(253, 203, 110, 0.08);
+  --ifm-alert-border-color: var(--ryx-warning);
+  --ifm-alert-background-color-highlight: rgba(253, 203, 110, 0.15);
+}
+
+.theme-admonition-danger {
+  --ifm-alert-background-color: rgba(225, 112, 85, 0.08);
+  --ifm-alert-border-color: var(--ryx-danger);
+  --ifm-alert-background-color-highlight: rgba(225, 112, 85, 0.15);
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--ryx-bg-card) !important;
+  border: 1px solid var(--ryx-border) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  transition: all 0.25s ease !important;
+}
+
+.card:hover {
+  border-color: var(--ryx-accent) !important;
+  box-shadow: 0 4px 16px var(--ryx-accent-glow) !important;
+  transform: translateY(-2px);
+}
+
+/* ── TOC (Table of Contents) ─────────────────────────────────────────────── */
+
+.table-of-contents {
+  font-size: 0.8rem;
+}
+
+.table-of-contents__link {
+  color: var(--ryx-text-muted);
+  transition: color 0.15s ease;
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+  margin-left: -2px;
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: var(--ryx-accent);
+  border-left-color: var(--ryx-accent);
+}
+
+/* ── Breadcrumbs ─────────────────────────────────────────────────────────── */
+
+.breadcrumbs__link {
+  font-size: 0.85rem;
+  color: var(--ryx-text-muted);
+  transition: color 0.15s ease;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.breadcrumbs__link:hover {
+  color: var(--ryx-accent);
+  background: var(--ryx-accent-glow);
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--ryx-text-primary);
+  background: transparent;
+  font-weight: 600;
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────────── */
+
+.pagination-nav__link {
+  background: var(--ryx-bg-card);
+  border: 1px solid var(--ryx-border);
+  border-radius: 10px;
+  transition: all 0.25s ease;
+}
+
+.pagination-nav__link:hover {
+  border-color: var(--ryx-accent);
+  box-shadow: 0 2px 12px var(--ryx-accent-glow);
+}
+
+.pagination-nav__label {
+  color: var(--ryx-accent);
+  font-weight: 600;
+}
+
+.pagination-nav__sublabel {
+  color: var(--ryx-text-muted);
+  font-size: 0.8rem;
+}
+
+/* ── Architecture Diagram ────────────────────────────────────────────────── */
+
+.architecture-diagram {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  margin: 1.5rem 0;
+  border-radius: 12px;
+  border: 1px solid var(--ryx-border);
+  background: var(--ryx-bg-card);
+  overflow: hidden;
+}
+
+.architecture-diagram img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+.architecture-diagram:hover img {
+  transform: scale(1.02);
+}
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.markdown > * {
+  animation: fadeInUp 0.4s ease both;
+}
+
+.markdown > *:nth-child(1) { animation-delay: 0.05s; }
+.markdown > *:nth-child(2) { animation-delay: 0.1s; }
+.markdown > *:nth-child(3) { animation-delay: 0.15s; }
+.markdown > *:nth-child(4) { animation-delay: 0.2s; }
+.markdown > *:nth-child(5) { animation-delay: 0.25s; }
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ryx-border-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ryx-text-muted);
+}
+
+/* ── Doc Item Layout ─────────────────────────────────────────────────────── */
+
+.docMainContainer_node_modules {
+  max-width: 100% !important;
+}
+
+.container {
+  max-width: 1400px !important;
+}
+
+.row {
+  margin: 0 !important;
+}
+
+.col {
+  padding: 0 !important;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .markdown h1 {
+    font-size: 2rem !important;
+  }
+
+  .markdown h2 {
+    font-size: 1.5rem !important;
+  }
+
+  table {
+    font-size: 0.8rem;
+  }
+
+  th, td {
+    padding: 8px 10px;
+  }
+}
