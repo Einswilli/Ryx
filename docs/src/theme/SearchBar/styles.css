@@ -1,0 +1,123 @@
+.ryx-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 5px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--ryx-border);
+  background: var(--ryx-bg-tertiary);
+  transition: all 0.25s ease;
+  min-width: 220px;
+  position: relative;
+}
+
+.ryx-search:focus-within {
+  border-color: var(--ryx-accent);
+  box-shadow: 0 0 0 3px var(--ryx-accent-glow);
+  background: var(--ryx-bg-secondary);
+}
+
+.ryx-search__icon {
+  color: var(--ryx-text-muted);
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.ryx-search:focus-within .ryx-search__icon {
+  color: var(--ryx-accent);
+}
+
+.ryx-search__input {
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--ryx-text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+  width: 100%;
+  min-width: 0;
+}
+
+.ryx-search__input::placeholder {
+  color: var(--ryx-text-muted);
+}
+
+.ryx-search__shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--ryx-border-strong);
+  background: var(--ryx-bg-card);
+  color: var(--ryx-text-muted);
+  font-size: 0.7rem;
+  font-family: inherit;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ryx-search__dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: var(--ryx-bg-secondary);
+  border: 1px solid var(--ryx-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  z-index: 1000;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.ryx-search__result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--ryx-text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-align: left;
+}
+
+.ryx-search__result:hover {
+  background: var(--ryx-accent-glow);
+}
+
+.ryx-search__result-title {
+  font-weight: 500;
+  color: var(--ryx-text-primary);
+}
+
+.ryx-search__result-section {
+  font-size: 0.75rem;
+  color: var(--ryx-text-muted);
+  font-weight: 400;
+}
+
+.ryx-search__no-results {
+  padding: 14px;
+  text-align: center;
+  color: var(--ryx-text-muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .ryx-search {
+    min-width: 140px;
+  }
+
+  .ryx-search__shortcut {
+    display: none;
+  }
+}
