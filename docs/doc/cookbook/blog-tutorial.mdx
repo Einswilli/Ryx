@@ -1,0 +1,196 @@
+---
+sidebar_position: 2
+---
+
+# Blog Tutorial
+
+Build a complete blog application with Ryx — models, relationships, queries, and more.
+
+## Step 1: Define Models
+
+```python
+from ryx import (
+    Model, CharField, TextField, DateTimeField,
+    ForeignKey, BooleanField, SlugField,
+    Index,
+)
+
+class Author(Model):
+    name  = CharField(max_length=100)
+    email = CharField(max_length=254, unique=True)
+    bio   = TextField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+
+class Category(Model):
+    name        = CharField(max_length=50, unique=True)
+    description = TextField(null=True, blank=True)
+    slug        = SlugField(unique=True)
+
+class Post(Model):
+    title      = CharField(max_length=200)
+    slug       = SlugField(max_length=210, unique=True)
+    body       = TextField()
+    active     = BooleanField(default=False)
+    author     = ForeignKey(Author, on_delete="CASCADE", related_name="posts")
+    category   = ForeignKey(Category, on_delete="SET_NULL", null=True, related_name="posts")
+    created_at = DateTimeField(auto_now_add=True)
+    updated_at = DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [Index(fields=["slug"], name="idx_post_slug")]
+
+    async def clean(self):
+        if self.active and not self.body:
+            raise ValidationError({"body": ["Active posts must have content"]})
+
+class Comment(Model):
+    post       = ForeignKey(Post, on_delete="CASCADE", related_name="comments")
+    author     = CharField(max_length=100)
+    body       = TextField()
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+```
+
+## Step 2: Setup & Migrate
+
+```python
+import asyncio
+import ryx
+from ryx.migrations import MigrationRunner
+
+async def setup():
+    await ryx.setup("sqlite:///blog.db")
+    await MigrationRunner([Author, Category, Post, Comment]).migrate()
+
+asyncio.run(setup())
+```
+
+## Step 3: Create Content
+
+```python
+# Create authors
+alice = await Author.objects.create(name="Alice", email="alice@example.com")
+bob   = await Author.objects.create(name="Bob", email="bob@example.com")
+
+# Create categories
+tech  = await Category.objects.create(name="Technology", slug="tech")
+life  = await Category.objects.create(name="Lifestyle", slug="life")
+
+# Create posts
+post1 = await Post.objects.create(
+    title="Getting Started with Rust",
+    slug="getting-started-rust",
+    body="Rust is a systems programming language...",
+    active=True,
+    author=alice,
+    category=tech,
+)
+
+post2 = await Post.objects.create(
+    title="My Morning Routine",
+    slug="morning-routine",
+    body="I wake up at 5am every day...",
+    active=True,
+    author=bob,
+    category=life,
+)
+
+# Create comments
+await Comment.objects.create(post=post1, author="Reader1", body="Great article!")
+await Comment.objects.create(post=post1, author="Reader2", body="Very helpful!")
+await Comment.objects.create(post=post2, author="Reader3", body="Inspiring!")
+```
+
+## Step 4: Query
+
+```python
+# All active posts
+posts = await Post.objects.filter(active=True)
+
+# Posts by a specific author
+alice_posts = await Post.objects.filter(author_id=alice.pk)
+
+# Posts in a category with comment count
+from ryx import Count
+
+posts_with_comments = await (
+    Post.objects
+        .filter(active=True)
+        .annotate(comment_count=Count("comments.id"))
+        .order_by("-comment_count")
+)
+
+# Search posts
+posts = await Post.objects.filter(
+    Q(title__contains="Rust") | Q(body__contains="Rust"),
+    active=True,
+)
+
+# Recent posts with author info
+from ryx.relations import apply_select_related
+
+posts = await Post.objects.filter(active=True).order_by("-created_at").limit(5)
+posts = await apply_select_related(posts, fields=["author", "category"])
+
+for post in posts:
+    print(f"{post.title} by {post.author.name} in {post.category.name}")
+```
+
+## Step 5: Stats Dashboard
+
+```python
+from ryx import Count, Sum
+
+# Blog-wide stats
+stats = await Post.objects.aggregate(
+    total_posts=Count("id"),
+    active_posts=Count("id", filter=Q(active=True)),
+    total_comments=Count("comments.id"),
+)
+
+# Per-author stats
+author_stats = await (
+    Post.objects
+        .values("author_id", "author__name")
+        .annotate(posts=Count("id"))
+        .order_by("-posts")
+)
+
+# Per-category stats
+category_stats = await (
+    Post.objects
+        .filter(active=True)
+        .values("category_id", "category__name")
+        .annotate(posts=Count("id"))
+)
+```
+
+## Step 6: Signals & Hooks
+
+```python
+from ryx import receiver, post_save, pre_delete
+
+@receiver(post_save, sender=Comment)
+async def on_comment_saved(sender, instance, created, **kwargs):
+    if created:
+        print(f"New comment on post #{instance.post_id}")
+
+@receiver(pre_delete, sender=Author)
+async def on_author_deleting(sender, instance, **kwargs):
+    post_count = await Post.objects.filter(author_id=instance.pk).count()
+    if post_count > 0:
+        print(f"Warning: {instance.name} has {post_count} posts that will be deleted")
+```
+
+## Complete Script
+
+See `examples/` in the repository for runnable versions of each step.
+
+## Next Steps
+
+→ **[Testing](./testing)** — Test strategies with Ryx

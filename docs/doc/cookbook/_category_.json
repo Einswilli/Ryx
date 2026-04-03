@@ -1,0 +1,8 @@
+{
+  "label": "Cookbook",
+  "position": 10,
+  "link": {
+    "type": "generated-index",
+    "description": "Real-world tutorials and recipes for building with Ryx."
+  }
+}
