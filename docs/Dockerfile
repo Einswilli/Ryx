@@ -27,10 +27,10 @@ RUN npm install
 
 # Copie du serveur et des fichiers buildés
 COPY server.js .
-COPY --from=build /app/dist ./dist
+COPY --from=build /app/build ./dist
 
 # Port sur lequel le serveur écoute
-EXPOSE 2026
+EXPOSE 2027
 
 # Lancer le serveur
 CMD ["node", "server.js"]
