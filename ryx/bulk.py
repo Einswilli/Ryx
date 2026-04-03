@@ -258,11 +258,9 @@ async def bulk_delete(
     return await builder.execute_delete()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+#
 # Streaming (async generator)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
+#
 async def stream(
     queryset,
     *,
