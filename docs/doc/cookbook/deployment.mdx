@@ -1,0 +1,132 @@
+---
+sidebar_position: 4
+---
+
+# Deployment
+
+Production setup and tuning for Ryx.
+
+## Pool Tuning
+
+```python
+await ryx.setup(
+    "postgres://user:pass@db.example.com/mydb",
+    max_connections=20,    # Scale with your server's capacity
+    min_connections=5,     # Keep warm connections
+    connect_timeout=30,    # Generous timeout for cloud DBs
+    idle_timeout=600,      # 10 min idle before closing
+    max_lifetime=1800,     # 30 min max connection age
+)
+```
+
+### Sizing Guidelines
+
+| Server Size | max_connections | min_connections |
+|---|---|---|
+| Small (1-2 cores) | 5-10 | 1-2 |
+| Medium (4-8 cores) | 10-20 | 3-5 |
+| Large (16+ cores) | 20-50 | 5-10 |
+
+:::tip
+Your database server also has a connection limit. Make sure `max_connections × number_of_processes` doesn't exceed it.
+:::
+
+## Feature Flags
+
+Enable only the backends you need to reduce binary size:
+
+```toml
+# Cargo.toml
+[features]
+default = ["postgres"]
+postgres = ["sqlx/postgres"]
+```
+
+```bash
+maturin develop --features postgres
+maturin build --features postgres --release
+```
+
+## Environment Variables
+
+```bash
+# Database URL
+export RYX_DATABASE_URL="postgres://user:pass@db.example.com/mydb"
+
+# Or use a settings module
+# ryx_settings.py
+DATABASE_URL = "postgres://user:pass@db.example.com/mydb"
+MODELS = ["myapp.models"]
+MIGRATIONS_DIR = "migrations/"
+```
+
+## Health Checks
+
+```python
+import ryx
+
+async def health_check():
+    if not ryx.is_connected():
+        return {"status": "unhealthy", "reason": "not connected"}
+
+    stats = ryx.pool_stats()
+    if stats["available"] == 0:
+        return {"status": "degraded", "pool": stats}
+
+    return {"status": "healthy", "pool": stats}
+```
+
+## Migration Strategy
+
+### File-Based Migrations (Recommended)
+
+```bash
+# In CI/CD pipeline
+python -m ryx makemigrations --models myapp.models --dir migrations/ --check
+python -m ryx migrate --url $DATABASE_URL --models myapp.models
+```
+
+### Direct Migration (Simple Deployments)
+
+```python
+# In your startup code
+from ryx.migrations import MigrationRunner
+
+async def startup():
+    await ryx.setup(os.environ["DATABASE_URL"])
+    await MigrationRunner([Author, Post, Comment]).migrate()
+```
+
+## Logging
+
+Ryx uses `tracing` in Rust. Enable logging:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
+
+## Monitoring
+
+```python
+import asyncio
+import ryx
+
+async def monitor_pool():
+    while True:
+        stats = ryx.pool_stats()
+        print(f"Pool: {stats['available']} available, {stats['in_use']} in use")
+        await asyncio.sleep(30)
+
+asyncio.create_task(monitor_pool())
+```
+
+## Checklist
+
+- [ ] Enable only needed database backends
+- [ ] Tune pool size for your server
+- [ ] Set up health checks
+- [ ] Configure migration strategy
+- [ ] Set up connection monitoring
+- [ ] Use `RYX_DATABASE_URL` or settings module
+- [ ] Test with production-like data volume
