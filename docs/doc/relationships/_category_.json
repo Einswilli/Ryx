@@ -1,0 +1,8 @@
+{
+  "label": "Relationships",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Work with ForeignKey, OneToOne, ManyToMany and eager loading strategies."
+  }
+}

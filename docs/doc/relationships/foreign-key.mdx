@@ -1,0 +1,99 @@
+---
+sidebar_position: 2
+---
+
+# ForeignKey
+
+A ForeignKey creates a many-to-one relationship between two models.
+
+## Defining a ForeignKey
+
+```python
+class Author(Model):
+    name = CharField(max_length=100)
+
+class Post(Model):
+    title  = CharField(max_length=200)
+    author = ForeignKey(Author, on_delete="CASCADE")
+```
+
+This creates an `author_id` column in the `posts` table with a foreign key constraint.
+
+## Options
+
+| Option | Description |
+|---|---|
+| `on_delete` | What happens when the referenced row is deleted |
+| `related_name` | Name for the reverse relation accessor |
+| `null` | Allow NULL (optional relationship) |
+
+### on_delete Strategies
+
+| Strategy | Behavior |
+|---|---|
+| `"CASCADE"` | Delete the related objects too |
+| `"SET_NULL"` | Set the FK to NULL (requires `null=True`) |
+| `"RESTRICT"` | Prevent deletion if related objects exist |
+| `"PROTECT"` | Raise ProtectedError if related objects exist |
+| `"SET_DEFAULT"` | Set to the field's default value |
+
+```python
+# Cascade: deleting an author deletes their posts
+author = ForeignKey(Author, on_delete="CASCADE")
+
+# Set NULL: deleting a category sets posts to uncategorized
+category = ForeignKey(Category, on_delete="SET_NULL", null=True)
+
+# Restrict: can't delete an author who has posts
+author = ForeignKey(Author, on_delete="RESTRICT")
+```
+
+### related_name
+
+Access related objects from the "one" side:
+
+```python
+class Post(Model):
+    author = ForeignKey(Author, on_delete="CASCADE", related_name="posts")
+
+# From author to posts
+author = await Author.objects.get(pk=1)
+posts = await author.posts.all()  # Uses the ReverseFKManager
+```
+
+## String References
+
+Use strings for forward references (models not yet defined):
+
+```python
+class Post(Model):
+    author = ForeignKey("Author", on_delete="CASCADE")
+
+class Author(Model):
+    name = CharField(max_length=100)
+```
+
+## Self-Referential
+
+```python
+class Category(Model):
+    name   = CharField(max_length=100)
+    parent = ForeignKey("self", on_delete="CASCADE", null=True, related_name="children")
+```
+
+## Querying Through FK
+
+```python
+# Filter by FK id
+Post.objects.filter(author_id=5)
+
+# Filter by FK field
+Post.objects.filter(author__name="John")
+
+# Is null
+Post.objects.filter(author__isnull=True)
+```
+
+## Next Steps
+
+→ **[OneToOne](./one-to-one)** — One-to-one relationships
