@@ -229,15 +229,23 @@ async def bulk_update(
 async def bulk_delete(
     model: Type["Model"],
     instances: Sequence["Model"],
+    *,
+    batch_size: int = 500,
 ) -> int:
-    """Delete many model instances in a single DELETE ... WHERE pk IN (...).
+    """Delete many model instances in batched DELETE ... WHERE pk IN (...) queries.
+
+    Batching is required because SQLite has a hard limit of 999 bound
+    parameters per statement.  With a default ``batch_size`` of 500, a
+    single-row table (just the PK) can safely delete up to 500 rows per
+    statement.
 
     Args:
-        model:     The Model class.
-        instances: Instances to delete (must have pks set).
+        model:      The Model class.
+        instances:  Instances to delete (must have pks set).
+        batch_size: Max instances per DELETE statement.  Default: 500.
 
     Returns:
-        Number of rows deleted.
+        Total number of rows deleted.
 
     Signals:
         Does NOT fire pre_delete / post_delete signals.
@@ -252,10 +260,12 @@ async def bulk_delete(
 
     from ryx import ryx_core as _core
 
-    builder = _core.QueryBuilder(model._meta.table_name)
-    # We pass pks as a list for the __in lookup
-    builder = builder.add_filter(pk_field.column, "in", pks, negated=False)
-    return await builder.execute_delete()
+    total = 0
+    for batch in _chunked(pks, batch_size):
+        builder = _core.QueryBuilder(model._meta.table_name)
+        builder = builder.add_filter(pk_field.column, "in", list(batch), negated=False)
+        total += await builder.execute_delete()
+    return total
 
 
 #

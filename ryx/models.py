@@ -270,11 +270,15 @@ class Manager:
 
         return await bulk_update(self._model, instances, fields, batch_size=batch_size)
 
-    async def bulk_delete(self, instances: Optional[list] = None) -> int:
+    async def bulk_delete(
+        self, instances: Optional[list] = None, batch_size: int = 500
+    ) -> int:
         """Delete many instances. If no instances given, delete all."""
         if instances is None:
             return await self.get_queryset().delete()
         from ryx.bulk import bulk_delete
+
+        return await bulk_delete(self._model, instances, batch_size=batch_size)
 
         return await bulk_delete(self._model, instances)
 
