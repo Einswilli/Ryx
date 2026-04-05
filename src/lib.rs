@@ -634,7 +634,6 @@ fn execute_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
-    let _values = (); // Shadowing pour éviter la capture
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
@@ -656,7 +655,6 @@ fn fetch_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
-    let _values = ();
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
