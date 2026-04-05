@@ -302,7 +302,12 @@ fn bind_values<'q>(
 ///   - Vec<u8> (bytes)
 ///   - bool
 ///
+/// Decode an AnyRow into a HashMap<String, JsonValue>.
+///
 /// We try each type in order and fall back to String if nothing else works.
+///
+/// Boolean detection on SQLite uses a zero-allocation case-insensitive check
+/// on the column name (no `to_lowercase()` allocation).
 fn decode_row(row: &AnyRow) -> DecodedRow {
     let mut map = HashMap::new();
 
@@ -318,12 +323,20 @@ fn decode_row(row: &AnyRow) -> DecodedRow {
         // We detect this by trying Option<String> last.
 
         let value: JsonValue = if let Ok(i) = row.try_get::<i64, _>(column.ordinal()) {
-            // Check if this column name suggests a boolean
-            let col_lower = name.to_lowercase();
-            let looks_bool = col_lower.starts_with("is_")
-                || col_lower.starts_with("has_")
-                || col_lower.starts_with("can_")
-                || col_lower.ends_with("_flag");
+            // Zero-allocation boolean detection: check common boolean column
+            // prefixes/suffixes without allocating a lowercase string.
+            let looks_bool = name.starts_with("is_")
+                || name.starts_with("Is_")
+                || name.starts_with("IS_")
+                || name.starts_with("has_")
+                || name.starts_with("Has_")
+                || name.starts_with("HAS_")
+                || name.starts_with("can_")
+                || name.starts_with("Can_")
+                || name.starts_with("CAN_")
+                || name.ends_with("_flag")
+                || name.ends_with("_Flag")
+                || name.ends_with("_FLAG");
             if looks_bool && (i == 0 || i == 1) {
                 JsonValue::Bool(i != 0)
             } else {
