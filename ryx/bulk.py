@@ -262,9 +262,9 @@ async def bulk_delete(
 
     total = 0
     for batch in _chunked(pks, batch_size):
-        builder = _core.QueryBuilder(model._meta.table_name)
-        builder = builder.add_filter(pk_field.column, "in", list(batch), negated=False)
-        total += await builder.execute_delete()
+        total += await _core.bulk_delete(
+            model._meta.table_name, pk_field.column, list(batch)
+        )
     return total
 
 

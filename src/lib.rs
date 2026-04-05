@@ -668,6 +668,47 @@ fn fetch_with_params<'py>(
     })
 }
 
+/// Bulk delete by primary key list in a single FFI call.
+///
+/// Equivalent to:
+///   builder = QueryBuilder(table)
+///   builder = builder.add_filter(pk_col, "in", pks, False)
+///   await builder.execute_delete()
+///
+/// But avoids 3 separate FFI crossings and intermediate allocations.
+#[pyfunction]
+fn bulk_delete<'py>(
+    py: Python<'py>,
+    table: String,
+    pk_col: String,
+    pks: Vec<Bound<'_, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    // Convert PK values to SqlValue in one pass
+    let pk_values: Vec<SqlValue> = pks
+        .iter()
+        .map(|v| py_to_sql_value(v))
+        .collect::<PyResult<_>>()?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        // Build the DELETE query manually (no QueryBuilder needed)
+        let placeholders: Vec<String> = (0..pk_values.len()).map(|i| format!("?{}", i + 1)).collect();
+        let sql = format!(
+            "DELETE FROM \"{}\" WHERE \"{}\" IN ({})",
+            table, pk_col, placeholders.join(", ")
+        );
+
+        let compiled = compiler::CompiledQuery {
+            sql,
+            values: pk_values,
+        };
+        let result = executor::execute(compiled).await.map_err(PyErr::from)?;
+        Python::attach(|py| {
+            let n = (result.rows_affected as i64).into_pyobject(py)?;
+            Ok(n.unbind())
+        })
+    })
+}
+
 // ###
 // Module definition
 // ###
@@ -685,7 +726,6 @@ fn ryx_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(begin_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(_set_active_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(_get_active_transaction, m)?)?;
-    m.add_function(wrap_pyfunction!(_get_active_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(setup, m)?)?;
     m.add_function(wrap_pyfunction!(register_lookup, m)?)?;
     m.add_function(wrap_pyfunction!(available_lookups, m)?)?;
@@ -695,6 +735,7 @@ fn ryx_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(raw_execute, m)?)?;
     m.add_function(wrap_pyfunction!(execute_with_params, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_with_params, m)?)?;
+    m.add_function(wrap_pyfunction!(bulk_delete, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
