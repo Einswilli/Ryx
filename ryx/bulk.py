@@ -162,17 +162,23 @@ async def bulk_update(
     *,
     batch_size: int = 500,
 ) -> int:
-    """Update specific fields on many instances efficiently.
+    """Update specific fields on many instances using CASE WHEN.
 
-    Uses individual UPDATE statements per instance (one per batch row) in a
-    single transaction for atomicity. A future version will use CASE WHEN
-    bulk updates.
+    Generates a single UPDATE statement per batch with CASE WHEN clauses::
+
+        UPDATE "table" SET
+            "col1" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END,
+            "col2" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END
+        WHERE "pk" IN (?, ?, ...)
+
+    This is dramatically faster than N individual UPDATE statements because
+    it requires only one DB round-trip per batch instead of N.
 
     Args:
         model:      The Model class.
         instances:  Model instances with updated field values.
         fields:     Field names to update (must not include pk).
-        batch_size: Number of updates per transaction batch.
+        batch_size: Max instances per UPDATE statement.  Default: 500.
 
     Returns:
         Total number of rows updated.
@@ -199,28 +205,53 @@ async def bulk_update(
     }
     total = 0
 
-    from ryx.transaction import transaction
+    from ryx.pool_ext import execute_with_params
 
     for batch in _chunked(instances, batch_size):
-        async with transaction():
-            for inst in batch:
-                if inst.pk is None:
-                    continue
-                from ryx import ryx_core as _core
+        # Collect valid instances (with pk set)
+        valid = [inst for inst in batch if inst.pk is not None]
+        if not valid:
+            continue
 
-                assignments = [
-                    (field_objs[f].column, field_objs[f].to_db(getattr(inst, f)))
-                    for f in update_fields
-                    if f in field_objs
-                ]
-                if not assignments:
-                    continue
-                builder = _core.QueryBuilder(model._meta.table_name)
-                builder = builder.add_filter(
-                    pk_field.column, "exact", inst.pk, negated=False
-                )
-                await builder.execute_update(assignments)
-                total += 1
+        pks = [inst.pk for inst in valid]
+        pk_col = pk_field.column
+        table = model._meta.table_name
+
+        # Build CASE WHEN clauses and collect bound values
+        # For each field: CASE pk_col WHEN pk1 THEN val1 WHEN pk2 THEN val2 END
+        case_clauses = []
+        all_values = []
+
+        for fname in update_fields:
+            if fname not in field_objs:
+                continue
+            fobj = field_objs[fname]
+            col = fobj.column
+            case_parts = [f'"{col}" = CASE "{pk_col}"']
+            for inst in valid:
+                val = fobj.to_db(getattr(inst, fname))
+                case_parts.append(f"WHEN ? THEN ?")
+                all_values.append(inst.pk)
+                all_values.append(val)
+            case_parts.append("END")
+            case_clauses.append(" ".join(case_parts))
+
+        if not case_clauses:
+            continue
+
+        # Build the full SQL
+        pk_placeholders = ", ".join("?" for _ in pks)
+        sql = (
+            f'UPDATE "{table}" SET '
+            f"{', '.join(case_clauses)} "
+            f'WHERE "{pk_col}" IN ({pk_placeholders})'
+        )
+
+        # Append PKs again for the WHERE IN clause
+        all_values.extend(pks)
+
+        result = await execute_with_params(sql, all_values)
+        total += result
 
     return total
 
