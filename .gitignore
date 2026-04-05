@@ -223,6 +223,7 @@ target
 
 # Readme (Not ready yet)
 # README.md
+ROADMAP*.md
 
 # Local configuration file for tests
 *.sqlite3

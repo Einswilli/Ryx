@@ -33,6 +33,25 @@ if TYPE_CHECKING:
     from ryx.models import Model
 
 
+def _detect_backend() -> str:
+    """Detect the database backend from the RYX_DATABASE_URL env var.
+
+    Returns one of: "sqlite", "postgres", "mysql".
+    Falls back to "sqlite" if the URL cannot be parsed.
+    """
+    import os
+
+    url = os.environ.get("RYX_DATABASE_URL", "").lower()
+    if url.startswith("postgres://") or url.startswith("postgresql://"):
+        return "postgres"
+    if url.startswith("mysql://") or url.startswith("mariadb://"):
+        return "mysql"
+    if url.startswith("sqlite://"):
+        return "sqlite"
+    # Default to sqlite for local development
+    return "sqlite"
+
+
 ####    bulk_create
 async def bulk_create(
     model: Type["Model"],
@@ -92,9 +111,14 @@ async def bulk_create(
     if not col_names:
         return list(instances)
 
+    pk_field = model._meta.pk_field
+
     # Process in batches
     for batch in _chunked(instances, batch_size):
-        await _insert_batch(model, batch, fields, col_names, ignore_conflicts)
+        pks = await _insert_batch(model, batch, fields, col_names, ignore_conflicts)
+        # Assign returned PKs to instances
+        for inst, pk in zip(batch, pks):
+            object.__setattr__(inst, pk_field.attname, pk)
 
     return list(instances)
 
@@ -105,8 +129,12 @@ async def _insert_batch(
     fields: list,
     col_names: list,
     ignore_conflicts: bool,
-) -> None:
-    """Execute a single multi-row INSERT for one batch."""
+) -> list:
+    """Execute a single multi-row INSERT for one batch.
+
+    Returns the list of assigned PKs (from RETURNING clause).
+    """
+    from ryx.pool_ext import fetch_with_params
 
     # Build quoted column list
     quoted_cols = ", ".join(f'"{c}"' for c in col_names)
@@ -121,37 +149,59 @@ async def _insert_batch(
 
     values_sql = ", ".join(row_placeholders)
 
-    # Conflict handling prefix/suffix
+    # Backend-aware conflict handling
+    backend = _detect_backend()
     if ignore_conflicts:
-        # We detect backend by checking the URL (rough heuristic)
-        # For now use the most compatible syntax
-        insert_kw = "INSERT OR IGNORE INTO"  # SQLite
+        if backend == "postgres":
+            # Postgres: ON CONFLICT DO NOTHING
+            conflict_suffix = "ON CONFLICT DO NOTHING"
+            insert_kw = "INSERT INTO"
+        elif backend == "mysql":
+            # MySQL: INSERT IGNORE
+            conflict_suffix = ""
+            insert_kw = "INSERT IGNORE INTO"
+        else:
+            # SQLite: INSERT OR IGNORE
+            conflict_suffix = ""
+            insert_kw = "INSERT OR IGNORE INTO"
     else:
+        conflict_suffix = ""
         insert_kw = "INSERT INTO"
 
-    sql = f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) VALUES {values_sql}'
+    pk_field = model._meta.pk_field
+    pk_col = pk_field.column if pk_field else "id"
 
-    # Use the raw executor via a QueryBuilder-style approach
-    # We build a CompiledQuery manually and push it through the executor
-    await _execute_raw_with_params(sql, all_values)
+    # RETURNING is not supported with ON CONFLICT DO NOTHING on all backends,
+    # and MySQL doesn't support RETURNING at all.
+    if backend == "postgres" and conflict_suffix:
+        # Postgres supports RETURNING with ON CONFLICT DO NOTHING
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f'VALUES {values_sql} {conflict_suffix} RETURNING "{pk_col}"'
+        )
+    elif backend == "mysql":
+        # MySQL: no RETURNING support
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f"VALUES {values_sql}"
+        )
+    else:
+        # SQLite: RETURNING works without conflict clause
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f'VALUES {values_sql} {conflict_suffix} RETURNING "{pk_col}"'
+        )
 
+    # Fetch returned IDs
+    if backend == "mysql":
+        # MySQL doesn't support RETURNING — execute and return empty list
+        from ryx.pool_ext import execute_with_params
 
-async def _execute_raw_with_params(sql: str, values: list) -> None:
-    """Execute a SQL string with positional parameters via the pool."""
+        await execute_with_params(sql, all_values)
+        return []
 
-    # Build a temporary QueryBuilder that executes raw SQL.
-    # We abuse execute_insert with a specially crafted node — actually we
-    # use the executor directly by calling raw_execute for param-less SQL
-    # or a direct pool execute for parameterized SQL.
-    #
-    # Since raw_execute in executor_helpers only handles no-param SQL, and our
-    # bulk INSERT has params, we use the QueryBuilder execute_update pathway
-    # with a pre-built SQL string. The cleanest way is a direct pool query.
-    #
-    # We implement this by using a Python-side async bridge to the Rust pool.
-    from ryx.pool_ext import execute_with_params
-
-    await execute_with_params(sql, values)
+    rows = await fetch_with_params(sql, all_values)
+    return [row[pk_col] for row in rows if pk_col in row]
 
 
 ####    bulk_update
@@ -162,17 +212,23 @@ async def bulk_update(
     *,
     batch_size: int = 500,
 ) -> int:
-    """Update specific fields on many instances efficiently.
+    """Update specific fields on many instances using CASE WHEN.
 
-    Uses individual UPDATE statements per instance (one per batch row) in a
-    single transaction for atomicity. A future version will use CASE WHEN
-    bulk updates.
+    Generates a single UPDATE statement per batch with CASE WHEN clauses::
+
+        UPDATE "table" SET
+            "col1" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END,
+            "col2" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END
+        WHERE "pk" IN (?, ?, ...)
+
+    This is dramatically faster than N individual UPDATE statements because
+    it requires only one DB round-trip per batch instead of N.
 
     Args:
         model:      The Model class.
         instances:  Model instances with updated field values.
         fields:     Field names to update (must not include pk).
-        batch_size: Number of updates per transaction batch.
+        batch_size: Max instances per UPDATE statement.  Default: 500.
 
     Returns:
         Total number of rows updated.
@@ -199,28 +255,68 @@ async def bulk_update(
     }
     total = 0
 
-    from ryx.transaction import transaction
+    from ryx import ryx_core as _core
+    from ryx.pool_ext import execute_with_params
 
     for batch in _chunked(instances, batch_size):
-        async with transaction():
-            for inst in batch:
-                if inst.pk is None:
-                    continue
-                from ryx import ryx_core as _core
+        # Collect valid instances (with pk set)
+        valid = [inst for inst in batch if inst.pk is not None]
+        if not valid:
+            continue
 
-                assignments = [
-                    (field_objs[f].column, field_objs[f].to_db(getattr(inst, f)))
-                    for f in update_fields
-                    if f in field_objs
-                ]
-                if not assignments:
-                    continue
-                builder = _core.QueryBuilder(model._meta.table_name)
-                builder = builder.add_filter(
-                    pk_field.column, "exact", inst.pk, negated=False
-                )
-                await builder.execute_update(assignments)
-                total += 1
+        pks = [inst.pk for inst in valid]
+        pk_col = pk_field.column
+        table = model._meta.table_name
+
+        # Build CASE WHEN clauses.
+        # Strategy: inline integers directly in SQL (zero FFI cost),
+        # use ? placeholders only for non-integer values.
+        case_clauses = []
+        all_values = []
+
+        for fname in update_fields:
+            if fname not in field_objs:
+                continue
+            fobj = field_objs[fname]
+            col = fobj.column
+            case_parts = [f'"{col}" = CASE "{pk_col}"']
+            for inst in valid:
+                val = fobj.to_db(getattr(inst, fname))
+                if isinstance(val, int) and not isinstance(val, bool):
+                    # Inline integers — zero FFI overhead
+                    case_parts.append(f"WHEN {inst.pk} THEN {val}")
+                else:
+                    case_parts.append("WHEN ? THEN ?")
+                    all_values.append(inst.pk)
+                    all_values.append(val)
+            case_parts.append("END")
+            case_clauses.append(" ".join(case_parts))
+
+        if not case_clauses:
+            continue
+
+        # WHERE IN — inline integer PKs
+        pk_parts = []
+        for pk in pks:
+            if isinstance(pk, int):
+                pk_parts.append(str(pk))
+            else:
+                pk_parts.append("?")
+                all_values.append(pk)
+
+        sql = (
+            f'UPDATE "{table}" SET '
+            f"{', '.join(case_clauses)} "
+            f'WHERE "{pk_col}" IN ({", ".join(pk_parts)})'
+        )
+
+        if all_values:
+            await execute_with_params(sql, all_values)
+        else:
+            from ryx.executor_helpers import raw_execute
+
+            await raw_execute(sql)
+        total += len(valid)
 
     return total
 
@@ -229,15 +325,23 @@ async def bulk_update(
 async def bulk_delete(
     model: Type["Model"],
     instances: Sequence["Model"],
+    *,
+    batch_size: int = 500,
 ) -> int:
-    """Delete many model instances in a single DELETE ... WHERE pk IN (...).
+    """Delete many model instances in batched DELETE ... WHERE pk IN (...) queries.
+
+    Batching is required because SQLite has a hard limit of 999 bound
+    parameters per statement.  With a default ``batch_size`` of 500, a
+    single-row table (just the PK) can safely delete up to 500 rows per
+    statement.
 
     Args:
-        model:     The Model class.
-        instances: Instances to delete (must have pks set).
+        model:      The Model class.
+        instances:  Instances to delete (must have pks set).
+        batch_size: Max instances per DELETE statement.  Default: 500.
 
     Returns:
-        Number of rows deleted.
+        Total number of rows deleted.
 
     Signals:
         Does NOT fire pre_delete / post_delete signals.
@@ -252,10 +356,12 @@ async def bulk_delete(
 
     from ryx import ryx_core as _core
 
-    builder = _core.QueryBuilder(model._meta.table_name)
-    # We pass pks as a list for the __in lookup
-    builder = builder.add_filter(pk_field.column, "in", pks, negated=False)
-    return await builder.execute_delete()
+    total = 0
+    for batch in _chunked(pks, batch_size):
+        total += await _core.bulk_delete(
+            model._meta.table_name, pk_field.column, list(batch)
+        )
+    return total
 
 
 #
