@@ -33,6 +33,25 @@ if TYPE_CHECKING:
     from ryx.models import Model
 
 
+def _detect_backend() -> str:
+    """Detect the database backend from the RYX_DATABASE_URL env var.
+
+    Returns one of: "sqlite", "postgres", "mysql".
+    Falls back to "sqlite" if the URL cannot be parsed.
+    """
+    import os
+
+    url = os.environ.get("RYX_DATABASE_URL", "").lower()
+    if url.startswith("postgres://") or url.startswith("postgresql://"):
+        return "postgres"
+    if url.startswith("mysql://") or url.startswith("mariadb://"):
+        return "mysql"
+    if url.startswith("sqlite://"):
+        return "sqlite"
+    # Default to sqlite for local development
+    return "sqlite"
+
+
 ####    bulk_create
 async def bulk_create(
     model: Type["Model"],
@@ -130,20 +149,57 @@ async def _insert_batch(
 
     values_sql = ", ".join(row_placeholders)
 
-    # Conflict handling prefix
+    # Backend-aware conflict handling
+    backend = _detect_backend()
     if ignore_conflicts:
-        insert_kw = "INSERT OR IGNORE INTO"  # SQLite
+        if backend == "postgres":
+            # Postgres: ON CONFLICT DO NOTHING
+            conflict_suffix = "ON CONFLICT DO NOTHING"
+            insert_kw = "INSERT INTO"
+        elif backend == "mysql":
+            # MySQL: INSERT IGNORE
+            conflict_suffix = ""
+            insert_kw = "INSERT IGNORE INTO"
+        else:
+            # SQLite: INSERT OR IGNORE
+            conflict_suffix = ""
+            insert_kw = "INSERT OR IGNORE INTO"
     else:
+        conflict_suffix = ""
         insert_kw = "INSERT INTO"
 
     pk_field = model._meta.pk_field
     pk_col = pk_field.column if pk_field else "id"
-    sql = (
-        f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
-        f'VALUES {values_sql} RETURNING "{pk_col}"'
-    )
+
+    # RETURNING is not supported with ON CONFLICT DO NOTHING on all backends,
+    # and MySQL doesn't support RETURNING at all.
+    if backend == "postgres" and conflict_suffix:
+        # Postgres supports RETURNING with ON CONFLICT DO NOTHING
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f'VALUES {values_sql} {conflict_suffix} RETURNING "{pk_col}"'
+        )
+    elif backend == "mysql":
+        # MySQL: no RETURNING support
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f"VALUES {values_sql}"
+        )
+    else:
+        # SQLite: RETURNING works without conflict clause
+        sql = (
+            f'{insert_kw} "{model._meta.table_name}" ({quoted_cols}) '
+            f'VALUES {values_sql} {conflict_suffix} RETURNING "{pk_col}"'
+        )
 
     # Fetch returned IDs
+    if backend == "mysql":
+        # MySQL doesn't support RETURNING — execute and return empty list
+        from ryx.pool_ext import execute_with_params
+
+        await execute_with_params(sql, all_values)
+        return []
+
     rows = await fetch_with_params(sql, all_values)
     return [row[pk_col] for row in rows if pk_col in row]
 
