@@ -391,6 +391,20 @@ fn py_to_sql_value(obj: &Bound<'_, PyAny>) -> PyResult<SqlValue> {
     Ok(SqlValue::Text(obj.str()?.to_str()?.to_string()))
 }
 
+/// Convert a Python list of integers to a list of SqlValue::Int.
+///
+/// This is a fast path that skips the full type-checking cascade
+/// (None → Bool → Int → Float → String → List → Tuple → str)
+/// for every element. Used by bulk_delete for PK lists.
+fn py_int_list_to_sql_values(list: &Bound<'_, PyList>) -> PyResult<Vec<SqlValue>> {
+    list.iter()
+        .map(|item| {
+            let n: i64 = item.extract()?;
+            Ok(SqlValue::Int(n))
+        })
+        .collect()
+}
+
 fn py_dict_to_qnode(obj: &Bound<'_, PyAny>) -> PyResult<QNode> {
     let dict = obj
         .cast::<PyDict>()
@@ -681,11 +695,9 @@ fn bulk_delete<'py>(
     pk_col: String,
     pks: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // Convert PK values to SqlValue in one pass
-    let pk_values: Vec<SqlValue> = pks
-        .iter()
-        .map(|v| py_to_sql_value(v))
-        .collect::<PyResult<_>>()?;
+    // Fast path: PKs are always integers — skip the full type-checking cascade
+    let pk_list = PyList::new(py, pks)?;
+    let pk_values = py_int_list_to_sql_values(&pk_list)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         // Build the DELETE query manually (no QueryBuilder needed)
