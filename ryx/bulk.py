@@ -267,8 +267,10 @@ async def bulk_update(
         pk_col = pk_field.column
         table = model._meta.table_name
 
-        # Build CASE WHEN clauses and collect bound values
-        # For each field: CASE pk_col WHEN pk1 THEN val1 WHEN pk2 THEN val2 END
+        # Build CASE WHEN clauses.
+        # Integers (PKs + IntField values) are inlined directly in the SQL
+        # to avoid the FFI conversion overhead of py_to_sql_value() for
+        # every single parameter. Only non-integer values use placeholders.
         case_clauses = []
         all_values = []
 
@@ -280,9 +282,13 @@ async def bulk_update(
             case_parts = [f'"{col}" = CASE "{pk_col}"']
             for inst in valid:
                 val = fobj.to_db(getattr(inst, fname))
-                case_parts.append(f"WHEN ? THEN ?")
-                all_values.append(inst.pk)
-                all_values.append(val)
+                # Inline integers directly — safe from SQL injection
+                if isinstance(val, int) and not isinstance(val, bool):
+                    case_parts.append(f"WHEN {inst.pk} THEN {val}")
+                else:
+                    case_parts.append(f"WHEN ? THEN ?")
+                    all_values.append(inst.pk)
+                    all_values.append(val)
             case_parts.append("END")
             case_clauses.append(" ".join(case_parts))
 
@@ -290,18 +296,28 @@ async def bulk_update(
             continue
 
         # Build the full SQL
-        pk_placeholders = ", ".join("?" for _ in pks)
+        # Inline remaining integer PKs in WHERE IN clause when possible
+        pk_parts = []
+        for pk in pks:
+            if isinstance(pk, int):
+                pk_parts.append(str(pk))
+            else:
+                pk_parts.append("?")
+                all_values.append(pk)
+
         sql = (
             f'UPDATE "{table}" SET '
             f"{', '.join(case_clauses)} "
-            f'WHERE "{pk_col}" IN ({pk_placeholders})'
+            f'WHERE "{pk_col}" IN ({", ".join(pk_parts)})'
         )
 
-        # Append PKs again for the WHERE IN clause
-        all_values.extend(pks)
+        if all_values:
+            await execute_with_params(sql, all_values)
+        else:
+            from ryx.executor_helpers import raw_execute
 
-        result = await execute_with_params(sql, all_values)
-        total += result
+            await raw_execute(sql)
+        total += len(valid)
 
     return total
 
