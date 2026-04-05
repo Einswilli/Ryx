@@ -254,10 +254,14 @@ class Manager:
             return obj, True
 
     async def bulk_create(self, instances: list[Model], batch_size: int = 500) -> list:
-        """Insert many instances in batches. Returns the list (pks may or may not be set)."""
-        for instance in instances:
-            await instance.save(validate=False)  # skip validation for bulk ops
-        return instances
+        """Insert many instances in batches using multi-row INSERT.
+
+        Returns the list with PKs set (if the DB supports RETURNING).
+        Delegates to the optimized ``ryx.bulk.bulk_create`` function.
+        """
+        from ryx.bulk import bulk_create
+
+        return await bulk_create(self._model, instances, batch_size=batch_size)
 
     async def bulk_update(
         self, instances: list, fields: list, batch_size: int = 500
@@ -266,11 +270,15 @@ class Manager:
 
         return await bulk_update(self._model, instances, fields, batch_size=batch_size)
 
-    async def bulk_delete(self, instances: Optional[list] = None) -> int:
+    async def bulk_delete(
+        self, instances: Optional[list] = None, batch_size: int = 500
+    ) -> int:
         """Delete many instances. If no instances given, delete all."""
         if instances is None:
             return await self.get_queryset().delete()
         from ryx.bulk import bulk_delete
+
+        return await bulk_delete(self._model, instances, batch_size=batch_size)
 
         return await bulk_delete(self._model, instances)
 

@@ -413,7 +413,7 @@ async def cmd_inspectdb(args) -> None:
 #
 def _get_url(args, required: bool = True) -> str:
     """Get the database URL from CLI arg, env var, or settings module."""
-    url = getattr(args, "url", None) or os.environ.get("ryx_DATABASE_URL")
+    url = getattr(args, "url", None) or os.environ.get("RYX_DATABASE_URL")
 
     if not url:
         # Try settings module
@@ -427,7 +427,7 @@ def _get_url(args, required: bool = True) -> str:
     if not url and required:
         print(
             "[ryx] No database URL found.\n"
-            "  Set ryx_DATABASE_URL environment variable, or\n"
+            "  Set RYX_DATABASE_URL environment variable, or\n"
             "  pass --url postgres://user:pass@host/db, or\n"
             "  create ryx_settings.py with DATABASE_URL = '...'"
         )

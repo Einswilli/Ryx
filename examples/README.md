@@ -40,6 +40,7 @@ uv run python examples/02_crud_operations.py
 | 10 | `10_caching.py` | **Caching** | `MemoryCache`, `configure_cache()`, `QuerySet.cache()`, named cache keys, auto-invalidation, `invalidate()`, `invalidate_model()`, `invalidate_all()`, TTL |
 | 11 | `11_migrations.py` | **Migrations** | `MigrationRunner`, `Autodetector`, `DDLGenerator`, `detect_backend()`, `SchemaState`, `diff_states()`, schema evolution, `Meta.managed=False` |
 | 12 | `12_sync_bridge.py` | **Sync/Async Bridge** | `run_sync()`, `sync_to_async()`, `async_to_sync()`, `run_async()`, CLI script pattern, sync repository pattern |
+| 13 | `13_benchmark_sqlalchemy.py` | **Performance Benchmark vs SQLAlchemy** | Ryx ORM vs SQLAlchemy ORM vs SQLAlchemy Core vs Ryx raw SQL — bulk_create, filter, aggregate, bulk_update, bulk_delete |
 
 ## Quick Reference
 
