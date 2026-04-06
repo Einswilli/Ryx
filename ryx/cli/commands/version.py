@@ -18,7 +18,18 @@ class VersionCommand(Command):
         try:
             from ryx import __version__
 
+            verbose = getattr(args, "verbose", False)
+
             print(f"ryx ORM {__version__}")
+
+            if verbose:
+                try:
+                    import ryx.ryx_core as _core
+
+                    print(f"  Rust core: {_core.__version__}")
+                except Exception:
+                    pass
+
         except Exception:
             print("ryx ORM (version unknown)")
         return 0
@@ -34,9 +45,5 @@ class VersionCommand(Command):
 
 async def cmd_version(args) -> None:
     """Print ryx version."""
-    try:
-        from ryx import __version__
-
-        print(f"ryx ORM {__version__}")
-    except Exception:
-        print("ryx ORM (version unknown)")
+    cmd = VersionCommand()
+    await cmd.execute(args)
