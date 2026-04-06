@@ -87,12 +87,27 @@ class InspectDbCommand(Command):
             for col in cols:
                 col_name = col.get("column_name") or col.get("name", "unknown")
                 col_type = (col.get("data_type") or col.get("type") or "TEXT").upper()
-                nullable = col.get("is_nullable", "YES") == "YES" or bool(
-                    col.get("notnull", 0) == 0
-                )
+
+                # Handle nullable - different keys for Postgres vs SQLite
+                if "is_nullable" in col:
+                    # Postgres/MySQL style
+                    nullable = col.get("is_nullable", "YES") == "YES"
+                elif "notnull" in col:
+                    # SQLite style: notnull=0 means nullable, notnull=1 means NOT NULL
+                    nullable = col.get("notnull", 0) == 0
+                else:
+                    nullable = True
+
+                # Determine if this is a primary key
+                is_pk = col.get("pk", 0) == 1 or col.get("primary_key", False)
+
                 field_type = self._db_type_to_field(col_type)
-                null_kw = ", null=True" if nullable else ""
-                output.append(f"    {col_name} = {field_type}({null_kw})")
+
+                # Only add null=True if field is nullable and not a primary key
+                if nullable and not is_pk:
+                    output.append(f"    {col_name} = {field_type}(null=True)")
+                else:
+                    output.append(f"    {col_name} = {field_type}()")
 
             output.append("")
 
