@@ -1,14 +1,10 @@
 //
 // ###
-// Ryx — SQL Compiler
+// Ryx — SQL Compiler Implementation
+// ###
 //
-// Supports:
-//   compile_q()       : recursive Q-tree → SQL fragment
-//   compile_joins()   : JoinClause list → SQL JOIN clauses
-//   compile_aggs()    : AggregateExpr list → SELECT aggregate columns
-//   compile_group_by(): GROUP BY clause
-//   compile_having()  : HAVING clause (same engine as WHERE)
-//   compile_select()  : now merges plain columns + aggregate annotations
+// This file contains the SQL compiler that transforms QueryNode AST into SQL strings.
+// See compiler/mod.rs for the module structure.
 // ###
 
 use crate::errors::{RyxError, RyxResult};
@@ -17,20 +13,20 @@ use crate::query::ast::{
     AggFunc, AggregateExpr, FilterNode, JoinClause, JoinKind, QNode, QueryNode, QueryOperation,
     SortDirection, SqlValue,
 };
-use crate::query::lookup::{self, LookupContext};
+use crate::query::lookups::date_lookups as date;
+use crate::query::lookups::json_lookups as json;
+use crate::query::lookups::{self, LookupContext};
 
-// ###
-// Output type
-// ###
+pub use super::helpers::{apply_like_wrapping, qualified_col, split_qualified, KNOWN_TRANSFORMS};
+
+use super::helpers;
+
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     pub sql: String,
     pub values: Vec<SqlValue>,
 }
 
-// ###
-// Public entry point
-// ###
 pub fn compile(node: &QueryNode) -> RyxResult<CompiledQuery> {
     let mut values: Vec<SqlValue> = Vec::new();
     let sql = match &node.operation {
@@ -49,22 +45,16 @@ pub fn compile(node: &QueryNode) -> RyxResult<CompiledQuery> {
     Ok(CompiledQuery { sql, values })
 }
 
-// ###
-// SELECT
-// ###
-
 fn compile_select(
     node: &QueryNode,
     columns: Option<&[String]>,
     values: &mut Vec<SqlValue>,
 ) -> RyxResult<String> {
-    // # SELECT list
-    // Columns from plain columns arg + annotation aliases merged together.
     let base_cols = match columns {
         None => "*".to_string(),
         Some(cols) => cols
             .iter()
-            .map(|c| qualified_col(c))
+            .map(|c| helpers::qualified_col(c))
             .collect::<Vec<_>>()
             .join(", "),
     };
@@ -74,15 +64,13 @@ fn compile_select(
     let select_list = match (base_cols.as_str(), agg_cols.as_str()) {
         (_, "") => base_cols,
         ("*", _) => {
-            // When we have annotations we drop the bare * and only emit the
-            // GROUP BY columns + aggregates (standard SQL).
             if node.group_by.is_empty() {
                 agg_cols
             } else {
                 let gb = node
                     .group_by
                     .iter()
-                    .map(|c| quote_col(c))
+                    .map(|c| helpers::quote_col(c))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{gb}, {agg_cols}")
@@ -94,16 +82,14 @@ fn compile_select(
     let distinct = if node.distinct { "DISTINCT " } else { "" };
     let mut sql = format!(
         "SELECT {distinct}{select_list} FROM {tbl}",
-        tbl = quote_col(&node.table),
+        tbl = helpers::quote_col(&node.table),
     );
 
-    // # JOINs
     if !node.joins.is_empty() {
         sql.push(' ');
         sql.push_str(&compile_joins(&node.joins));
     }
 
-    // # WHERE
     let where_sql =
         compile_where_combined(&node.filters, node.q_filter.as_ref(), values, node.backend)?;
     if !where_sql.is_empty() {
@@ -111,26 +97,23 @@ fn compile_select(
         sql.push_str(&where_sql);
     }
 
-    // # GROUP BY
     if !node.group_by.is_empty() {
         let gb = node
             .group_by
             .iter()
-            .map(|c| quote_col(c))
+            .map(|c| helpers::quote_col(c))
             .collect::<Vec<_>>()
             .join(", ");
         sql.push_str(" GROUP BY ");
         sql.push_str(&gb);
     }
 
-    // # HAVING
     if !node.having.is_empty() {
         let having = compile_filters(&node.having, values, node.backend)?;
         sql.push_str(" HAVING ");
         sql.push_str(&having);
     }
 
-    // # ORDER BY
     if !node.order_by.is_empty() {
         sql.push_str(" ORDER BY ");
         sql.push_str(&compile_order_by(&node.order_by));
@@ -146,12 +129,6 @@ fn compile_select(
     Ok(sql)
 }
 
-// ###
-// AGGREGATE (no rows returned — only aggregate scalars)
-//
-// Used by `.aggregate(total=Sum("views"))`.
-// Returns a single row dict like {"total": 1234, "avg_views": 42.5}.
-// ###
 fn compile_aggregate(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<String> {
     if node.annotations.is_empty() {
         return Err(RyxError::Internal(
@@ -159,7 +136,7 @@ fn compile_aggregate(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<
         ));
     }
     let agg_cols = compile_agg_cols(&node.annotations);
-    let mut sql = format!("SELECT {agg_cols} FROM {}", quote_col(&node.table));
+    let mut sql = format!("SELECT {agg_cols} FROM {}", helpers::quote_col(&node.table));
 
     if !node.joins.is_empty() {
         sql.push(' ');
@@ -175,17 +152,9 @@ fn compile_aggregate(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<
 
     Ok(sql)
 }
-
-// ###
-// COUNT
-// ###
-
-// ###
-// COUNT
-// ###
 
 fn compile_count(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<String> {
-    let mut sql = format!("SELECT COUNT(*) FROM {}", quote_col(&node.table));
+    let mut sql = format!("SELECT COUNT(*) FROM {}", helpers::quote_col(&node.table));
     if !node.joins.is_empty() {
         sql.push(' ');
         sql.push_str(&compile_joins(&node.joins));
@@ -199,12 +168,8 @@ fn compile_count(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<Stri
     Ok(sql)
 }
 
-// ###
-// DELETE
-// ###
-
 fn compile_delete(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<String> {
-    let mut sql = format!("DELETE FROM {}", quote_col(&node.table));
+    let mut sql = format!("DELETE FROM {}", helpers::quote_col(&node.table));
     let where_sql =
         compile_where_combined(&node.filters, node.q_filter.as_ref(), values, node.backend)?;
     if !where_sql.is_empty() {
@@ -213,10 +178,6 @@ fn compile_delete(node: &QueryNode, values: &mut Vec<SqlValue>) -> RyxResult<Str
     }
     Ok(sql)
 }
-
-// ###
-// UPDATE
-// ###
 
 fn compile_update(
     node: &QueryNode,
@@ -230,10 +191,14 @@ fn compile_update(
         .iter()
         .map(|(col, val)| {
             values.push(val.clone());
-            format!("{} = ?", quote_col(col))
+            format!("{} = ?", helpers::quote_col(col))
         })
         .collect();
-    let mut sql = format!("UPDATE {} SET {}", quote_col(&node.table), set.join(", "));
+    let mut sql = format!(
+        "UPDATE {} SET {}",
+        helpers::quote_col(&node.table),
+        set.join(", ")
+    );
     let where_sql =
         compile_where_combined(&node.filters, node.q_filter.as_ref(), values, node.backend)?;
     if !where_sql.is_empty() {
@@ -242,10 +207,6 @@ fn compile_update(
     }
     Ok(sql)
 }
-
-// ###
-// INSERT
-// ###
 
 fn compile_insert(
     node: &QueryNode,
@@ -260,7 +221,7 @@ fn compile_insert(
     values.extend(vals);
     let cols_sql = cols
         .iter()
-        .map(|c| quote_col(c))
+        .map(|c| helpers::quote_col(c))
         .collect::<Vec<_>>()
         .join(", ");
     let ph = std::iter::repeat_n("?", cols.len())
@@ -268,7 +229,7 @@ fn compile_insert(
         .join(", ");
     let mut sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
-        quote_col(&node.table),
+        helpers::quote_col(&node.table),
         cols_sql,
         ph
     );
@@ -278,11 +239,7 @@ fn compile_insert(
     Ok(sql)
 }
 
-// ###
-// JOIN compilation
-// ###
-
-fn compile_joins(joins: &[JoinClause]) -> String {
+pub fn compile_joins(joins: &[JoinClause]) -> String {
     joins
         .iter()
         .map(|j| {
@@ -296,26 +253,34 @@ fn compile_joins(joins: &[JoinClause]) -> String {
             let alias_sql = j
                 .alias
                 .as_deref()
-                .map(|a| format!(" AS {}", quote_col(a)))
+                .map(|a| format!(" AS {}", helpers::quote_col(a)))
                 .unwrap_or_default();
-            let (l_table, l_col) = split_qualified(&j.on_left);
-            let (r_table, r_col) = split_qualified(&j.on_right);
+            let (l_table, l_col): (String, String) = helpers::split_qualified(&j.on_left);
+            let (r_table, r_col): (String, String) = helpers::split_qualified(&j.on_right);
             let on_l = if l_table.is_empty() {
-                quote_col(&l_col)
+                helpers::quote_col(&l_col)
             } else {
-                format!("{}.{}", quote_col(&l_table), quote_col(&l_col))
+                format!(
+                    "{}.{}",
+                    helpers::quote_col(&l_table),
+                    helpers::quote_col(&l_col)
+                )
             };
             let on_r = if r_table.is_empty() {
-                quote_col(&r_col)
+                helpers::quote_col(&r_col)
             } else {
-                format!("{}.{}", quote_col(&r_table), quote_col(&r_col))
+                format!(
+                    "{}.{}",
+                    helpers::quote_col(&r_table),
+                    helpers::quote_col(&r_col)
+                )
             };
             if j.kind == JoinKind::CrossJoin {
-                format!("{kind} {}{alias_sql}", quote_col(&j.table))
+                format!("{kind} {}{alias_sql}", helpers::quote_col(&j.table))
             } else {
                 format!(
                     "{kind} {}{alias_sql} ON {on_l} = {on_r}",
-                    quote_col(&j.table)
+                    helpers::quote_col(&j.table)
                 )
             }
         })
@@ -323,17 +288,13 @@ fn compile_joins(joins: &[JoinClause]) -> String {
         .join(" ")
 }
 
-// ###
-// Aggregate column list  →  SUM("views") AS "total_views", ...
-// ###
-
-fn compile_agg_cols(anns: &[AggregateExpr]) -> String {
+pub fn compile_agg_cols(anns: &[AggregateExpr]) -> String {
     anns.iter()
         .map(|a| {
             let col = if a.field == "*" {
                 "*".to_string()
             } else {
-                qualified_col(&a.field)
+                helpers::qualified_col(&a.field)
             };
             let distinct = if a.distinct && a.func != AggFunc::Count {
                 "DISTINCT "
@@ -343,13 +304,13 @@ fn compile_agg_cols(anns: &[AggregateExpr]) -> String {
                 ""
             };
             match &a.func {
-                AggFunc::Raw(expr) => format!("{expr} AS {}", quote_col(&a.alias)),
+                AggFunc::Raw(expr) => format!("{expr} AS {}", helpers::quote_col(&a.alias)),
                 f => format!(
                     "{}({}{}) AS {}",
                     f.sql_name(),
                     distinct,
                     col,
-                    quote_col(&a.alias)
+                    helpers::quote_col(&a.alias)
                 ),
             }
         })
@@ -357,9 +318,19 @@ fn compile_agg_cols(anns: &[AggregateExpr]) -> String {
         .join(", ")
 }
 
-// ###
-// WHERE  =  flat filters  AND  Q-tree  (merged)
-// ###
+pub fn compile_order_by(clauses: &[crate::query::ast::OrderByClause]) -> String {
+    clauses
+        .iter()
+        .map(|c| {
+            let dir = match c.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            format!("{} {dir}", helpers::qualified_col(&c.field))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn compile_where_combined(
     filters: &[FilterNode],
@@ -385,15 +356,7 @@ fn compile_where_combined(
     })
 }
 
-// ###
-// Q-tree compiler  (recursive)
-// ###
-
-/// Recursively compile a QNode tree into a SQL fragment.
-///
-/// Design: we emit minimal parentheses — each non-leaf node wraps its children
-/// in parens only when necessary (AND inside OR must be parenthesised).
-fn compile_q(q: &QNode, values: &mut Vec<SqlValue>, backend: Backend) -> RyxResult<String> {
+pub fn compile_q(q: &QNode, values: &mut Vec<SqlValue>, backend: Backend) -> RyxResult<String> {
     match q {
         QNode::Leaf {
             field,
@@ -422,10 +385,6 @@ fn compile_q(q: &QNode, values: &mut Vec<SqlValue>, backend: Backend) -> RyxResu
     }
 }
 
-// ###
-// Flat filter list compiler
-// ###
-
 fn compile_filters(
     filters: &[FilterNode],
     values: &mut Vec<SqlValue>,
@@ -438,10 +397,6 @@ fn compile_filters(
     Ok(parts.join(" AND "))
 }
 
-// ###
-// Single filter → SQL fragment  (shared by flat list and Q-tree)
-// ###
-
 fn compile_single_filter(
     field: &str,
     lookup: &str,
@@ -450,38 +405,24 @@ fn compile_single_filter(
     values: &mut Vec<SqlValue>,
     backend: Backend,
 ) -> RyxResult<String> {
-    // Support "table.column" qualified references in filters
-    // Also handle field__transform patterns (e.g., "created_at__year")
-    // For JSON key lookups like "bio__key__priority", we need to handle specially
-    let known_transforms = [
-        "date", "year", "month", "day", "hour", "minute", "second", "week", "dow", "quarter",
-        "time", "iso_week", "iso_dow", "key", "key_text", "json",
-    ];
-
     let (base_column, applied_transforms, json_key) = if field.contains("__") {
         let parts: Vec<&str> = field.split("__").collect();
 
-        // Find the first part that's NOT a known transform - that's the JSON key
-        // For example: "bio__key__priority" -> transforms=["key"], key="priority", base="bio"
         let mut transforms = Vec::new();
         let mut key_part: Option<&str> = None;
 
         for part in parts[1..].iter() {
-            if known_transforms.contains(part) {
+            if KNOWN_TRANSFORMS.contains(part) {
                 transforms.push(*part);
             } else {
-                // First non-transform part is the JSON key
                 key_part = Some(*part);
                 break;
             }
         }
 
         if let Some(key) = key_part {
-            // Base column is just the first part (the field name)
-            // Transforms is everything that came before the key
             (parts[0].to_string(), transforms, Some(key.to_string()))
         } else if !transforms.is_empty() {
-            // All parts are transforms
             (parts[0].to_string(), transforms, None)
         } else {
             (field.to_string(), vec![], None)
@@ -490,28 +431,18 @@ fn compile_single_filter(
         (field.to_string(), vec![], None)
     };
 
-    // For JSON key transforms, we need to pass the key to resolve()
-    // The key is embedded in the field name (bio__key__priority -> key=priority)
-
-    // If the lookup contains "__" (is a chained lookup like "month__gte"),
-    // DON'T apply transforms here - let resolve() handle it completely
-    // This avoids double-transform issues where the compiler applies transform
-    // and then resolve() also tries to handle it
     let final_column = if lookup.contains("__") {
-        // For chained lookups, use just the base column - resolve() will handle transforms
-        qualified_col(&base_column)
+        helpers::qualified_col(&base_column)
     } else if !applied_transforms.is_empty() {
-        // For simple transform-only lookups (like "year"), apply transforms here
-        let mut result = qualified_col(&base_column);
+        let mut result = helpers::qualified_col(&base_column);
         for transform in &applied_transforms {
-            result = lookup::apply_transform(transform, &result, backend, None)?;
+            result = lookups::apply_transform(transform, &result, backend, None)?;
         }
         result
     } else {
-        qualified_col(&base_column)
+        helpers::qualified_col(&base_column)
     };
 
-    // For JSON key transforms, pass the key in the context
     let ctx = LookupContext {
         column: final_column.clone(),
         negated,
@@ -519,7 +450,6 @@ fn compile_single_filter(
         json_key: json_key.clone(),
     };
 
-    // # isnull (no bind param)
     if lookup == "isnull" {
         let is_null = match value {
             SqlValue::Bool(b) => *b,
@@ -538,7 +468,6 @@ fn compile_single_filter(
         });
     }
 
-    // # in (expand N placeholders)
     if lookup == "in" {
         let items = match value {
             SqlValue::List(v) => v.clone(),
@@ -547,6 +476,7 @@ fn compile_single_filter(
         if items.is_empty() {
             return Ok("(1 = 0)".into());
         }
+
         let ph = std::iter::repeat_n("?", items.len())
             .collect::<Vec<_>>()
             .join(", ");
@@ -559,7 +489,6 @@ fn compile_single_filter(
         });
     }
 
-    // # range (two bind params)
     if lookup == "range" {
         let (lo, hi) = match value {
             SqlValue::List(v) if v.len() == 2 => (v[0].clone(), v[1].clone()),
@@ -575,19 +504,8 @@ fn compile_single_filter(
         });
     }
 
-    // # general lookup
-    // If lookup is a transform (like "year", "month"), use the transform function which includes = ?
-    // BUT if lookup contains "__" (like "date__gte"), we need to use resolve() to handle the chain
-    // ALSO use resolve() for JSON key transforms even if lookup is simple (like "exact")
-    let known_transforms = [
-        "date", "year", "month", "day", "hour", "minute", "second", "week", "dow", "quarter",
-        "time", "iso_week", "iso_dow", "key", "key_text", "json",
-    ];
-
-    // If lookup contains "__", it's a chained lookup (e.g., "date__gte") - use resolve()
-    // OR if we have a JSON key (json_key is Some), we need resolve() to apply it
     if lookup.contains("__") || json_key.is_some() {
-        let fragment = lookup::resolve(&base_column, lookup, &ctx)?;
+        let fragment = lookups::resolve(&base_column, lookup, &ctx)?;
         values.push(value.clone());
         return Ok(if negated {
             format!("NOT ({fragment})")
@@ -596,24 +514,24 @@ fn compile_single_filter(
         });
     }
 
-    if known_transforms.contains(&lookup) {
+    if KNOWN_TRANSFORMS.contains(&lookup) {
         let transform_fn = match lookup {
-            "date" => lookup::date_transform,
-            "year" => lookup::year_transform,
-            "month" => lookup::month_transform,
-            "day" => lookup::day_transform,
-            "hour" => lookup::hour_transform,
-            "minute" => lookup::minute_transform,
-            "second" => lookup::second_transform,
-            "week" => lookup::week_transform,
-            "dow" => lookup::dow_transform,
-            "quarter" => lookup::quarter_transform,
-            "time" => lookup::time_transform,
-            "iso_week" => lookup::iso_week_transform,
-            "iso_dow" => lookup::iso_dow_transform,
-            "key" => lookup::json_key_transform,
-            "key_text" => lookup::json_key_text_transform,
-            "json" => lookup::json_cast_transform,
+            "date" => date::date_transform as crate::query::lookups::LookupFn,
+            "year" => date::year_transform as crate::query::lookups::LookupFn,
+            "month" => date::month_transform as crate::query::lookups::LookupFn,
+            "day" => date::day_transform as crate::query::lookups::LookupFn,
+            "hour" => date::hour_transform as crate::query::lookups::LookupFn,
+            "minute" => date::minute_transform as crate::query::lookups::LookupFn,
+            "second" => date::second_transform as crate::query::lookups::LookupFn,
+            "week" => date::week_transform as crate::query::lookups::LookupFn,
+            "dow" => date::dow_transform as crate::query::lookups::LookupFn,
+            "quarter" => date::quarter_transform as crate::query::lookups::LookupFn,
+            "time" => date::time_transform as crate::query::lookups::LookupFn,
+            "iso_week" => date::iso_week_transform as crate::query::lookups::LookupFn,
+            "iso_dow" => date::iso_dow_transform as crate::query::lookups::LookupFn,
+            "key" => json::json_key_transform as crate::query::lookups::LookupFn,
+            "key_text" => json::json_key_text_transform as crate::query::lookups::LookupFn,
+            "json" => json::json_cast_transform as crate::query::lookups::LookupFn,
             _ => {
                 return Err(RyxError::UnknownLookup {
                     field: field.to_string(),
@@ -621,12 +539,11 @@ fn compile_single_filter(
                 })
             }
         };
-        // For transforms, we need to push the value to the values vector
         values.push(value.clone());
         return Ok(transform_fn(&ctx));
     }
 
-    let fragment = lookup::resolve(&base_column, lookup, &ctx)?;
+    let fragment = lookups::resolve(&base_column, lookup, &ctx)?;
     let bound = apply_like_wrapping(lookup, value.clone());
     values.push(bound);
     Ok(if negated {
@@ -636,95 +553,21 @@ fn compile_single_filter(
     })
 }
 
-// ###
-// ORDER BY
-// ###
-fn compile_order_by(clauses: &[crate::query::ast::OrderByClause]) -> String {
-    clauses
-        .iter()
-        .map(|c| {
-            let dir = match c.direction {
-                SortDirection::Asc => "ASC",
-                SortDirection::Desc => "DESC",
-            };
-            format!("{} {dir}", qualified_col(&c.field))
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-// ###
-// Identifier helpers
-// ###
-
-/// Double-quote a simple identifier (column or table name).
-pub fn quote_col(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
-}
-
-/// Handle `table.column` → `"table"."column"`, or plain column → `"column"`.
-/// Also handles annotation aliases (already an expression — left as-is).
-fn qualified_col(s: &str) -> String {
-    if s.contains('.') {
-        let (table, col) = s.split_once('.').unwrap();
-        format!("{}.{}", quote_col(table), quote_col(col))
-    } else {
-        quote_col(s)
-    }
-}
-
-/// Split `"table.column"` into `("table", "column")`.
-/// Returns `("", s)` if there is no dot.
-fn split_qualified(s: &str) -> (String, String) {
-    if let Some((t, c)) = s.split_once('.') {
-        (t.to_string(), c.to_string())
-    } else {
-        (String::new(), s.to_string())
-    }
-}
-
-/// Apply LIKE `%` wrapping to the value based on the lookup type.
-fn apply_like_wrapping(lookup: &str, value: SqlValue) -> SqlValue {
-    match lookup {
-        "contains" | "icontains" => wrap_text(value, |s| format!("%{s}%")),
-        "startswith" | "istartswith" => wrap_text(value, |s| format!("{s}%")),
-        "endswith" | "iendswith" => wrap_text(value, |s| format!("%{s}")),
-        _ => value,
-    }
-}
-
-fn wrap_text(value: SqlValue, f: impl Fn(String) -> String) -> SqlValue {
-    if let SqlValue::Text(s) = value {
-        SqlValue::Text(f(s))
-    } else {
-        value
-    }
-}
-
-// ###
-// Unit tests
-// ###
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::ast::*;
-    use crate::query::lookup;
-
-    fn init() {
-        lookup::init_registry();
-    }
 
     #[test]
     fn test_bare_select() {
-        init();
+        init_registry();
         let q = compile(&QueryNode::select("posts")).unwrap();
         assert_eq!(q.sql, r#"SELECT * FROM "posts""#);
     }
 
     #[test]
     fn test_q_or() {
-        init();
+        init_registry();
         let mut node = QueryNode::select("posts");
         node = node.with_q(QNode::Or(vec![
             QNode::Leaf {
@@ -746,7 +589,7 @@ mod tests {
 
     #[test]
     fn test_inner_join() {
-        init();
+        init_registry();
         let node = QueryNode::select("posts").with_join(JoinClause {
             kind: JoinKind::Inner,
             table: "authors".into(),
@@ -761,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_aggregate_sum() {
-        init();
+        init_registry();
         let mut node = QueryNode::select("posts");
         node.operation = QueryOperation::Aggregate;
         node = node.with_annotation(AggregateExpr {
@@ -777,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_group_by() {
-        init();
+        init_registry();
         let mut node = QueryNode::select("posts");
         node = node
             .with_annotation(AggregateExpr {
@@ -793,7 +636,7 @@ mod tests {
 
     #[test]
     fn test_having() {
-        init();
+        init_registry();
         let mut node = QueryNode::select("posts");
         node.operation = QueryOperation::Select { columns: None };
         node = node
@@ -812,5 +655,9 @@ mod tests {
             });
         let q = compile(&node).unwrap();
         assert!(q.sql.contains("HAVING"), "{}", q.sql);
+    }
+
+    fn init_registry() {
+        crate::query::lookups::init_registry();
     }
 }
