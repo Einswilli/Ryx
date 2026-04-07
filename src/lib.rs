@@ -19,7 +19,7 @@ use crate::query::ast::{
     QueryOperation, SqlValue,
 };
 use crate::query::compiler;
-use crate::query::lookup;
+use crate::query::lookups;
 use crate::transaction::TransactionHandle;
 
 // ###
@@ -59,12 +59,12 @@ fn setup<'py>(
 
 #[pyfunction]
 fn register_lookup(name: String, sql_template: String) -> PyResult<()> {
-    lookup::register_custom(name, sql_template).map_err(PyErr::from)
+    lookups::register_custom(name, sql_template).map_err(PyErr::from)
 }
 
 #[pyfunction]
 fn available_lookups() -> PyResult<Vec<String>> {
-    lookup::registered_lookups().map_err(PyErr::from)
+    lookups::registered_lookups().map_err(PyErr::from)
 }
 
 #[pyfunction]
@@ -811,7 +811,7 @@ fn bulk_update<'py>(
 
 #[pymodule]
 fn ryx_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    lookup::init_registry();
+    lookups::init_registry();
 
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.worker_threads(4).enable_all();

@@ -10,4 +10,4 @@
 
 pub mod ast;
 pub mod compiler;
-pub mod lookup;
+pub mod lookups;
