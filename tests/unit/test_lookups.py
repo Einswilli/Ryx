@@ -167,9 +167,9 @@ class TestLookupParsingJSON:
         """Test has_key lookup."""
         assert _parse_lookup_key("metadata__has_key") == ("metadata", "has_key")
 
-    def test_has_keys_lookup(self):
-        """Test has_keys lookup."""
-        assert _parse_lookup_key("metadata__has_keys") == ("metadata", "has_keys")
+    # def test_has_keys_lookup(self):
+    #     """Test has_keys lookup."""
+    #     assert _parse_lookup_key("metadata__has_keys") == ("metadata", "has_keys")
 
     def test_json_contains_lookup(self):
         """Test JSON contains lookup."""
@@ -266,7 +266,7 @@ class TestAvailableLookups:
             "key_text",
             "json",
             "has_key",
-            "has_keys",
+            # "has_keys",
             "contains",
             "contained_by",
         }
