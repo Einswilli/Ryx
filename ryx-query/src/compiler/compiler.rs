@@ -25,6 +25,7 @@ use super::helpers;
 pub struct CompiledQuery {
     pub sql: String,
     pub values: Vec<SqlValue>,
+    pub db_alias: Option<String>,
 }
 
 pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
@@ -42,7 +43,11 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
             returning_id,
         } => compile_insert(node, cv, *returning_id, &mut values)?,
     };
-    Ok(CompiledQuery { sql, values })
+    Ok(CompiledQuery {
+        sql,
+        values,
+        db_alias: node.db_alias.clone(),
+    })
 }
 
 fn compile_select(
