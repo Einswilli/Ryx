@@ -160,8 +160,12 @@ class Options:
 class Manager:
     """Default query manager. Proxies to QuerySet."""
 
-    def __init__(self) -> None:
+    def __init__(self, alias: Optional[str] = None) -> None:
         self._model: Optional[type[Model]] = None
+        self._alias = alias
+
+    def contribute_to_class(self, model: type, name: str) -> None:
+        self._model = model
 
     def contribute_to_class(self, model: type, name: str) -> None:
         self._model = model
@@ -169,7 +173,7 @@ class Manager:
     def get_queryset(self):
         from ryx.queryset import QuerySet
 
-        return QuerySet(self._model)
+        return QuerySet(self._model, _using=self._alias)
 
     # Proxy shortcuts
     def all(self):
@@ -184,8 +188,12 @@ class Manager:
     def order_by(self, *f):
         return self.get_queryset().order_by(*f)
 
-    def using(self, alias):
-        return self.get_queryset()  # future: multi-db
+    def using(self, alias: str) -> "Manager":
+        """Return a new Manager bound to the specified database alias."""
+        new_mgr = Manager()
+        new_mgr._model = self._model
+        new_mgr._alias = alias
+        return new_mgr
 
     def cache(self, **kw):
         return self.get_queryset().cache(**kw)
@@ -229,7 +237,22 @@ class Manager:
     async def create(self, **kw):
         """Create and save a new model instance."""
         instance = self._model(**kw)
-        await instance.save()
+
+        # Use the manager's alias if specified
+        from ryx.router import get_router
+
+        router = get_router()
+        alias = None
+        if router:
+            alias = router.db_for_write(self._model)
+        if not alias:
+            alias = self._model._meta.database
+        if not alias:
+            alias = self._alias
+
+        # We need a way to pass the alias to instance.save()
+        # Let's add an optional `using` argument to save()
+        await instance.save(using=alias)
         return instance
 
     async def get_or_create(self, defaults: Optional[dict] = None, **kw):
@@ -505,7 +528,11 @@ class Model(metaclass=ModelMetaclass):
 
     # Persistence
     async def save(
-        self, *, validate: bool = True, update_fields: Optional[List[str]] = None
+        self,
+        *,
+        validate: bool = True,
+        update_fields: Optional[List[str]] = None,
+        using: Optional[str] = None,
     ) -> None:
         """Save the instance to the database.
 
@@ -516,6 +543,7 @@ class Model(metaclass=ModelMetaclass):
         Args:
             validate:      Run field validators + clean() before SQL (default: True).
             update_fields: If given, only UPDATE these field names (reduces SQL chatter).
+            using:         Explicitly specify the database alias to use.
         """
         created = self.pk is None
 
@@ -532,15 +560,16 @@ class Model(metaclass=ModelMetaclass):
         # pre_save signal
         await pre_save.send(sender=type(self), instance=self, created=created)
 
-        # Resolve database alias: Router.db_for_write -> Meta.database -> 'default'
+        # Resolve database alias: using -> Router.db_for_write -> Meta.database -> 'default'
         from ryx.router import get_router
 
         router = get_router()
-        alias = None
-        if router:
-            alias = router.db_for_write(type(self))
+        alias = using
         if not alias:
-            alias = self._meta.database
+            if router:
+                alias = router.db_for_write(type(self))
+            if not alias:
+                alias = self._meta.database
 
         # SQL execution
         # Creation
