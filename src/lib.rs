@@ -108,6 +108,7 @@ fn raw_fetch<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, PyAny>> {
         let compiled = compiler::CompiledQuery {
             sql,
             values: vec![],
+            db_alias: None,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| {
@@ -116,18 +117,20 @@ fn raw_fetch<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, PyAny>> {
         })
     })
 }
-
+ 
 #[pyfunction]
 fn raw_execute<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
             values: vec![],
+            db_alias: None,
         };
         executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(py.None().into_pyobject(py)?.unbind()))
     })
 }
+
 
 // ###
 // QueryBuilder
@@ -148,6 +151,12 @@ impl PyQueryBuilder {
         
         Ok(Self {
             node: QueryNode::select(table).with_backend(backend),
+        })
+    }
+ 
+    fn set_using(&self, alias: String) -> PyResult<PyQueryBuilder> {
+        Ok(PyQueryBuilder {
+            node: self.node.clone().with_db_alias(alias),
         })
     }
 
@@ -672,17 +681,19 @@ fn execute_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
-
+ 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
             values: sql_values,
+            db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(result.rows_affected.into_pyobject(py)?.unbind()))
     })
 }
 
+ 
 #[pyfunction]
 fn fetch_with_params<'py>(
     py: Python<'py>,
@@ -693,16 +704,19 @@ fn fetch_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
-
+ 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
             values: sql_values,
+            db_alias: None,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(decoded_rows_to_py(py, rows)?.unbind()))
     })
 }
+
+
 
 /// Bulk delete by primary key list in a single FFI call.
 ///
@@ -734,6 +748,7 @@ fn bulk_delete<'py>(
         let compiled = compiler::CompiledQuery {
             sql,
             values: pk_values,
+            db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| {
@@ -817,6 +832,7 @@ fn bulk_update<'py>(
         let compiled = compiler::CompiledQuery {
             sql,
             values: all_values,
+            db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| {
