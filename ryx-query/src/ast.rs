@@ -253,7 +253,8 @@ pub enum QueryOperation {
 #[derive(Debug, Clone)]
 pub struct QueryNode {
     pub table: String,
-    pub backend: Backend, // Database backend for SQL generation
+    pub backend: Backend,         // Database backend for SQL generation
+    pub db_alias: Option<String>, // Optional alias for multi-db routing
     pub operation: QueryOperation,
 
     // # WHERE
@@ -287,6 +288,7 @@ impl QueryNode {
         Self {
             table: table.into(),
             backend: Backend::PostgreSQL, // default, will be overridden at runtime
+            db_alias: None,
             operation: QueryOperation::Select { columns: None },
             filters: Vec::new(),
             q_filter: None,
@@ -375,6 +377,12 @@ impl QueryNode {
     #[must_use]
     pub fn with_backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
+        self
+    }
+
+    #[must_use]
+    pub fn with_db_alias(mut self, alias: String) -> Self {
+        self.db_alias = Some(alias);
         self
     }
 }

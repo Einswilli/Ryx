@@ -88,7 +88,7 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
  
-    let pool = pool::get(None)?;
+    let pool = pool::get(query.db_alias.as_deref())?;
  
     debug!(sql = %query.sql, "Executing SELECT");
  
@@ -130,7 +130,7 @@ pub async fn fetch_count(query: CompiledQuery) -> RyxResult<i64> {
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
  
-    let pool = pool::get(None)?;
+    let pool = pool::get(query.db_alias.as_deref())?;
  
     debug!(sql = %query.sql, "Executing COUNT");
  
@@ -173,7 +173,7 @@ pub async fn fetch_one(query: CompiledQuery) -> RyxResult<DecodedRow> {
             Err(RyxError::Internal("Transaction is no longer active".into()))
         }
     } else {
-        let pool = pool::get(None)?;
+        let pool = pool::get(query.db_alias.as_deref())?;
  
         let mut q = sqlx::query(&query.sql);
         q = bind_values(q, &query.values);
@@ -225,7 +225,7 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
  
-    let pool = pool::get(None)?;
+    let pool = pool::get(query.db_alias.as_deref())?;
  
     debug!(sql = %query.sql, "Executing mutation");
  
