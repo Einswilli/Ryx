@@ -110,7 +110,7 @@ from ryx.exceptions import (
 
 # Setup
 async def setup(
-    url: str,
+    urls: str | dict, # str | dict to maintain backward.
     *,
     max_connections: int = 10,
     min_connections: int = 1,
@@ -119,8 +119,13 @@ async def setup(
     max_lifetime: int = 1800,
 ) -> None:
     """Initialize the ryx connection pool. Call once at startup."""
+    
+    # For old versions wrap the url with a dict
+    if isinstance(urls, str):
+        urls = {'default': urls} 
+
     await _core.setup(
-        url,
+        urls,
         max_connections=max_connections,
         min_connections=min_connections,
         connect_timeout=connect_timeout,
@@ -149,8 +154,8 @@ def available_transforms() -> list[str]:
     return list(_core.list_transforms())
 
 
-def is_connected() -> bool:
-    return _core.is_connected()
+def is_connected(db_alias: str = 'default') -> bool:
+    return _core.is_connected(db_alias)
 
 
 def pool_stats() -> dict:
