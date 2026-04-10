@@ -188,6 +188,25 @@ impl PyQueryBuilder {
         })
     }
 
+    /// Add multiple filters in a single FFI call to reduce overhead when applying
+    /// many kwargs-based filters from Python.
+    fn add_filters_batch(
+        &self,
+        filters: Vec<(String, String, Bound<'_, PyAny>, bool)>,
+    ) -> PyResult<PyQueryBuilder> {
+        let mut node = self.node.as_ref().clone();
+        for (field, lookup, value, negated) in filters {
+            let sql_value = py_to_sql_value(&value)?;
+            node = node.with_filter(FilterNode {
+                field,
+                lookup,
+                value: sql_value,
+                negated,
+            });
+        }
+        Ok(PyQueryBuilder { node: Arc::new(node) })
+    }
+
     fn add_q_node(&self, node: &Bound<'_, PyAny>) -> PyResult<PyQueryBuilder> {
         let q = py_dict_to_qnode(node)?;
         Ok(PyQueryBuilder {
@@ -262,6 +281,15 @@ impl PyQueryBuilder {
                     .with_order_by(OrderByClause::parse(&field)),
             ),
         }
+    }
+
+    /// Batch add ORDER BY clauses to reduce repeated crossings.
+    fn add_order_by_batch(&self, fields: Vec<String>) -> PyQueryBuilder {
+        let mut node = self.node.as_ref().clone();
+        for f in fields {
+            node = node.with_order_by(OrderByClause::parse(&f));
+        }
+        PyQueryBuilder { node: Arc::new(node) }
     }
 
     fn set_limit(&self, n: u64) -> PyQueryBuilder {
