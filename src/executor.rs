@@ -44,7 +44,7 @@ use tracing::{debug, instrument};
 
 use crate::errors::{RyxError, RyxResult};
 use crate::pool;
-use ryx_query::{ast::SqlValue, compiler::CompiledQuery};
+use ryx_query::{ast::{SqlValue, QueryNode}, compiler::CompiledQuery};
 use crate::transaction;
 
 // ###
@@ -107,6 +107,13 @@ pub async fn fetch_raw(sql: String, db_alias: Option<String>) -> RyxResult<Vec<D
     let rows = sqlx::query(&sql).fetch_all(&*pool).await.map_err(RyxError::Database)?;
     Ok(decode_rows(&rows))
 }
+
+/// Compile a QueryNode then fetch all (single FFI hop helper).
+#[instrument(skip(node))]
+pub async fn fetch_all_compiled(node: QueryNode) -> RyxResult<Vec<DecodedRow>> {
+    let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
+    fetch_all(compiled).await
+}
  
 /// Execute a SELECT COUNT(*) query and return the count.
 
@@ -153,6 +160,12 @@ pub async fn fetch_count(query: CompiledQuery) -> RyxResult<i64> {
     Ok(count)
 }
 
+#[instrument(skip(node))]
+pub async fn fetch_count_compiled(node: QueryNode) -> RyxResult<i64> {
+    let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
+    fetch_count(compiled).await
+}
+
 
 /// Execute a SELECT and return at most one row.
 ///
@@ -195,6 +208,12 @@ pub async fn fetch_one(query: CompiledQuery) -> RyxResult<DecodedRow> {
             _ => Err(RyxError::MultipleObjectsReturned),
         }
     }
+}
+
+#[instrument(skip(node))]
+pub async fn fetch_one_compiled(node: QueryNode) -> RyxResult<DecodedRow> {
+    let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
+    fetch_one(compiled).await
 }
 
 
@@ -263,6 +282,12 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         rows_affected: result.rows_affected(),
         last_insert_id: None,
     })
+}
+
+#[instrument(skip(node))]
+pub async fn execute_compiled(node: QueryNode) -> RyxResult<MutationResult> {
+    let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
+    execute(compiled).await
 }
 
 /// Execute raw SQL without bind params.
