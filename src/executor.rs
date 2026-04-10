@@ -86,7 +86,7 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
         }
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
- 
+
     let pool = pool::get(query.db_alias.as_deref())?;
  
     debug!(sql = %query.sql, "Executing SELECT");
@@ -95,9 +95,17 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
     q = bind_values(q, &query.values);
  
     let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
- 
+
     let decoded = decode_rows(&rows);
     Ok(decoded)
+}
+
+/// Execute raw SQL (no binds) directly, bypassing compiler.
+#[instrument(skip(sql))]
+pub async fn fetch_raw(sql: String, db_alias: Option<String>) -> RyxResult<Vec<DecodedRow>> {
+    let pool = pool::get(db_alias.as_deref())?;
+    let rows = sqlx::query(&sql).fetch_all(&*pool).await.map_err(RyxError::Database)?;
+    Ok(decode_rows(&rows))
 }
  
 /// Execute a SELECT COUNT(*) query and return the count.
@@ -255,6 +263,14 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         rows_affected: result.rows_affected(),
         last_insert_id: None,
     })
+}
+
+/// Execute raw SQL without bind params.
+#[instrument(skip(sql))]
+pub async fn execute_raw(sql: String, db_alias: Option<String>) -> RyxResult<()> {
+    let pool = pool::get(db_alias.as_deref())?;
+    sqlx::query(&sql).execute(&*pool).await.map_err(RyxError::Database)?;
+    Ok(())
 }
 
 

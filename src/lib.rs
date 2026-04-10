@@ -109,12 +109,7 @@ fn raw_fetch<'py>(
     alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let compiled = compiler::CompiledQuery {
-            sql,
-            values: smallvec::smallvec![],
-            db_alias: alias,
-        };
-        let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
+        let rows = executor::fetch_raw(sql, alias).await.map_err(PyErr::from)?;
         Python::attach(|py| {
             let py_rows = decoded_rows_to_py(py, rows)?;
             Ok(py_rows.unbind())
@@ -130,12 +125,7 @@ fn raw_execute<'py>(
     alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let compiled = compiler::CompiledQuery {
-            sql,
-            values: smallvec::smallvec![],
-            db_alias: alias,
-        };
-        executor::execute(compiled).await.map_err(PyErr::from)?;
+        executor::execute_raw(sql, alias).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(py.None().into_pyobject(py)?.unbind()))
     })
 }
