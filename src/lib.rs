@@ -756,24 +756,13 @@ fn bulk_delete<'py>(
     pk_col: String,
     pks: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // Fast path: PKs are always integers — skip the full type-checking cascade
     let pk_list = PyList::new(py, pks)?;
     let pk_values = py_int_list_to_sql_values(&pk_list)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        // Build the DELETE query manually (no QueryBuilder needed)
-        let placeholders: Vec<String> = (0..pk_values.len()).map(|i| format!("?{}", i + 1)).collect();
-        let sql = format!(
-            "DELETE FROM \"{}\" WHERE \"{}\" IN ({})",
-            table, pk_col, placeholders.join(", ")
-        );
-
-        let compiled = compiler::CompiledQuery {
-            sql,
-            values: pk_values.into(),
-            db_alias: None,
-        };
-        let result = executor::execute(compiled).await.map_err(PyErr::from)?;
+        let result = executor::bulk_delete_compiled(table, pk_col, pk_values, None)
+            .await
+            .map_err(PyErr::from)?;
         Python::attach(|py| {
             let n = (result.rows_affected as i64).into_pyobject(py)?;
             Ok(n.unbind())

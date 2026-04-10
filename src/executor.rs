@@ -46,6 +46,7 @@ use crate::errors::{RyxError, RyxResult};
 use crate::pool;
 use ryx_query::{ast::{SqlValue, QueryNode}, compiler::CompiledQuery};
 use crate::transaction;
+use smallvec::SmallVec;
 
 // ###
 // Result types
@@ -288,6 +289,71 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
 pub async fn execute_compiled(node: QueryNode) -> RyxResult<MutationResult> {
     let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
     execute(compiled).await
+}
+
+/// Bulk insert rows in one shot.
+pub async fn bulk_insert_compiled(
+    table: String,
+    columns: Vec<String>,
+    rows: Vec<Vec<SqlValue>>,
+    returning_id: bool,
+    db_alias: Option<String>,
+) -> RyxResult<MutationResult> {
+    if rows.is_empty() {
+        return Ok(MutationResult { rows_affected: 0, last_insert_id: None });
+    }
+    let pool = pool::get(db_alias.as_deref())?;
+
+    let col_list = columns.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
+    let row_ph = format!("({})", std::iter::repeat("?").take(columns.len()).collect::<Vec<_>>().join(", "));
+    let values_sql = std::iter::repeat(row_ph.clone()).take(rows.len()).collect::<Vec<_>>().join(", ");
+
+    let mut flat: SmallVec<[SqlValue; 8]> = SmallVec::new();
+    for row in rows {
+        for v in row {
+            flat.push(v);
+        }
+    }
+
+    let sql = format!(
+        "INSERT INTO \"{}\" ({}) VALUES {}{}",
+        table,
+        col_list,
+        values_sql,
+        if returning_id { " RETURNING id" } else { "" }
+    );
+    let mut q = sqlx::query(&sql);
+    q = bind_values(q, &flat);
+    if returning_id {
+        let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
+        let last_insert_id = rows.first().and_then(|r| r.try_get::<i64, _>(0).ok());
+        Ok(MutationResult { rows_affected: rows.len() as u64, last_insert_id })
+    } else {
+        let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
+        Ok(MutationResult { rows_affected: res.rows_affected(), last_insert_id: None })
+    }
+}
+
+/// Bulk delete by PK list in one shot.
+pub async fn bulk_delete_compiled(
+    table: String,
+    pk_col: String,
+    pks: Vec<SqlValue>,
+    db_alias: Option<String>,
+) -> RyxResult<MutationResult> {
+    if pks.is_empty() {
+        return Ok(MutationResult { rows_affected: 0, last_insert_id: None });
+    }
+    let pool = pool::get(db_alias.as_deref())?;
+    let ph = std::iter::repeat("?").take(pks.len()).collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE \"{}\" IN ({})",
+        table, pk_col, ph
+    );
+    let mut q = sqlx::query(&sql);
+    q = bind_values(q, &pks);
+    let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
+    Ok(MutationResult { rows_affected: res.rows_affected(), last_insert_id: None })
 }
 
 /// Execute raw SQL without bind params.
