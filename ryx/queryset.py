@@ -250,7 +250,7 @@ class QuerySet:
 
     def __init__(
         self,
-        model: type,
+        model: Model,
         builder: Optional[_core.QueryBuilder] = None,
         *,
         _select_columns: Optional[List[str]] = None,
