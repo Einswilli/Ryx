@@ -111,7 +111,7 @@ fn raw_fetch<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
-            values: vec![],
+            values: smallvec::smallvec![],
             db_alias: alias,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
@@ -132,7 +132,7 @@ fn raw_execute<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
-            values: vec![],
+            values: smallvec::smallvec![],
             db_alias: alias,
         };
         executor::execute(compiled).await.map_err(PyErr::from)?;
@@ -724,7 +724,7 @@ fn execute_with_params<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
-            values: sql_values,
+            values: sql_values.into(),
             db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
@@ -747,7 +747,7 @@ fn fetch_with_params<'py>(
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
-            values: sql_values,
+            values: sql_values.into(),
             db_alias: None,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
@@ -786,7 +786,7 @@ fn bulk_delete<'py>(
 
         let compiled = compiler::CompiledQuery {
             sql,
-            values: pk_values,
+            values: pk_values.into(),
             db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
@@ -870,7 +870,7 @@ fn bulk_update<'py>(
 
         let compiled = compiler::CompiledQuery {
             sql,
-            values: all_values,
+            values: all_values.into(),
             db_alias: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
