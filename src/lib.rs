@@ -4,7 +4,6 @@ use std::sync::Arc;
 use pyo3::prelude::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
-use serde_json::Value as JsonValue;
 use tokio::sync::Mutex as TokioMutex;
 
 pub mod errors;
@@ -515,18 +514,18 @@ fn py_dict_children(dict: &Bound<'_, PyDict>) -> PyResult<Vec<QNode>> {
 
 fn decoded_row_to_py<'py>(
     py: Python<'py>,
-    row: HashMap<String, JsonValue>,
+    row: HashMap<String, SqlValue>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     for (k, v) in row {
-        dict.set_item(k, json_to_py(py, &v)?)?;
+        dict.set_item(k, sql_to_py(py, &v)?)?;
     }
     Ok(dict)
 }
 
 fn decoded_rows_to_py<'py>(
     py: Python<'py>,
-    rows: Vec<HashMap<String, JsonValue>>,
+    rows: Vec<HashMap<String, SqlValue>>,
 ) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
     for row in rows {
@@ -535,38 +534,24 @@ fn decoded_rows_to_py<'py>(
     Ok(list)
 }
 
-fn json_to_py<'py>(py: Python<'py>, v: &JsonValue) -> PyResult<Py<PyAny>> {
+fn sql_to_py<'py>(py: Python<'py>, v: &SqlValue) -> PyResult<Py<PyAny>> {
     Ok(match v {
-        JsonValue::Null => py.None(),
-        JsonValue::Bool(b) => {
+        SqlValue::Null => py.None(),
+        SqlValue::Bool(b) => {
             let py_bool = (*b).into_pyobject(py)?;
             <pyo3::Bound<'_, PyBool> as Clone>::clone(&py_bool)
                 .into_any()
                 .unbind()
         }
-        JsonValue::String(s) => s.into_pyobject(py)?.into_any().unbind(),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into_pyobject(py)?.into_any().unbind()
-            } else if let Some(f) = n.as_f64() {
-                f.into_pyobject(py)?.into_any().unbind()
-            } else {
-                n.to_string().into_pyobject(py)?.into_any().unbind()
-            }
-        }
-        JsonValue::Array(arr) => {
+        SqlValue::Int(i) => i.into_pyobject(py)?.into_any().unbind(),
+        SqlValue::Float(f) => f.into_pyobject(py)?.into_any().unbind(),
+        SqlValue::Text(s) => s.into_pyobject(py)?.into_any().unbind(),
+        SqlValue::List(items) => {
             let list = PyList::empty(py);
-            for item in arr {
-                list.append(json_to_py(py, item)?)?;
+            for item in items {
+                list.append(sql_to_py(py, item)?)?;
             }
             list.into_any().unbind()
-        }
-        JsonValue::Object(map) => {
-            let dict = PyDict::new(py);
-            for (k, v2) in map {
-                dict.set_item(k, json_to_py(py, v2)?)?;
-            }
-            dict.into_any().unbind()
         }
     })
 }

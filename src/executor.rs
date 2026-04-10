@@ -39,7 +39,6 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value as JsonValue;
 use sqlx::{Column, Row, any::AnyRow};
 use tracing::{debug, instrument};
 
@@ -57,7 +56,7 @@ use crate::transaction;
 /// Using `serde_json::Value` lets us represent NULL, integers, floats, strings,
 /// and booleans without a custom enum. JSON values convert cleanly to Python
 /// objects in the PyO3 layer.
-pub type DecodedRow = HashMap<String, JsonValue>;
+pub type DecodedRow = HashMap<String, ryx_query::ast::SqlValue>;
 
 /// Result of a non-SELECT query (INSERT/UPDATE/DELETE).
 #[derive(Debug)]
@@ -116,11 +115,10 @@ pub async fn fetch_count(query: CompiledQuery) -> RyxResult<i64> {
                 return Ok(0);
             }
             if let Some(value) = rows[0].values().next() {
-                if let Some(i) = value.as_i64() {
-                    return Ok(i);
-                }
-                if let Some(f) = value.as_f64() {
-                    return Ok(f as i64);
+                match value {
+                    SqlValue::Int(i) => return Ok(*i),
+                    SqlValue::Float(f) => return Ok(*f as i64),
+                    _ => {}
                 }
             }
             return Err(RyxError::Internal(
@@ -208,9 +206,13 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
             // Check if this is a RETURNING query
             if query.sql.to_uppercase().contains("RETURNING") {
                 let rows = active_tx.fetch_query(query).await?;
-                let last_insert_id = rows
-                    .first()
-                    .and_then(|row| row.values().next().and_then(|v| v.as_i64()));
+                let last_insert_id = rows.first().and_then(|row| {
+                    row.values().next().and_then(|v| match v {
+                        SqlValue::Int(i) => Some(*i),
+                        SqlValue::Float(f) => Some(*f as i64),
+                        _ => None,
+                    })
+                });
                 return Ok(MutationResult {
                     rows_affected: 1,
                     last_insert_id,
@@ -312,16 +314,8 @@ fn decode_row(row: &AnyRow) -> DecodedRow {
         let name = column.name().to_string();
 
         // Try to extract values in type priority order.
-        // On SQLite, booleans are stored as INTEGER (0/1), so we try i64 first
-        // and then check if the value looks like a bool.
-        // On Postgres/MySQL, bool columns decode as bool natively.
-        //
-        // null: sqlx signals NULL by returning an Err on every typed get.
-        // We detect this by trying Option<String> last.
-
-        let value: JsonValue = if let Ok(i) = row.try_get::<i64, _>(column.ordinal()) {
-            // Zero-allocation boolean detection: check common boolean column
-            // prefixes/suffixes without allocating a lowercase string.
+        let value = if let Ok(i) = row.try_get::<i64, _>(column.ordinal()) {
+            // Detect bool stored as int (SQLite/common patterns)
             let looks_bool = name.starts_with("is_")
                 || name.starts_with("Is_")
                 || name.starts_with("IS_")
@@ -335,21 +329,18 @@ fn decode_row(row: &AnyRow) -> DecodedRow {
                 || name.ends_with("_Flag")
                 || name.ends_with("_FLAG");
             if looks_bool && (i == 0 || i == 1) {
-                JsonValue::Bool(i != 0)
+                ryx_query::ast::SqlValue::Bool(i != 0)
             } else {
-                JsonValue::Number(i.into())
+                ryx_query::ast::SqlValue::Int(i)
             }
         } else if let Ok(b) = row.try_get::<bool, _>(column.ordinal()) {
-            JsonValue::Bool(b)
+            ryx_query::ast::SqlValue::Bool(b)
         } else if let Ok(f) = row.try_get::<f64, _>(column.ordinal()) {
-            serde_json::Number::from_f64(f)
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Null)
+            ryx_query::ast::SqlValue::Float(f)
         } else if let Ok(s) = row.try_get::<String, _>(column.ordinal()) {
-            JsonValue::String(s)
+            ryx_query::ast::SqlValue::Text(s)
         } else {
-            // Either NULL or a type we don't handle — represent as null.
-            JsonValue::Null
+            ryx_query::ast::SqlValue::Null
         };
 
         map.insert(name, value);
