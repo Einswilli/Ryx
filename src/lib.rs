@@ -888,30 +888,6 @@ fn bulk_update<'py>(
     }
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let n = pk_values.len();
-        let f = field_values.len();
-
-        // Build CASE WHEN clauses
-        let mut case_clauses = Vec::with_capacity(f);
-        let mut all_values = Vec::with_capacity(n * f * 2 + n);
-
-        for (fi, col_name) in col_names.iter().enumerate() {
-            let mut case_parts = Vec::with_capacity(n * 3 + 2);
-            case_parts.push(format!("\"{}\" = CASE \"{}\"", col_name, pk_col));
-            for i in 0..n {
-                case_parts.push("WHEN ? THEN ?".to_string());
-                all_values.push(pk_values[i].clone());
-                all_values.push(field_values[fi][i].clone());
-            }
-            case_parts.push("END".to_string());
-            case_clauses.push(case_parts.join(" "));
-        }
-
-        // WHERE IN clause
-        for pk in &pk_values {
-            all_values.push(pk.clone());
-        }
-
         let result = executor::bulk_update(table, pk_col, col_names, field_values, pk_values, None)
             .await
             .map_err(PyErr::from)?;
