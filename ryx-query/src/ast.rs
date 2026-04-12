@@ -99,7 +99,7 @@ pub struct FilterNode {
 // JoinClause
 //
 /// The kind of SQL JOIN to emit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -186,7 +186,7 @@ pub struct AggregateExpr {
 //
 // OrderByClause
 //
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SortDirection {
     Asc,
     Desc,

@@ -17,38 +17,62 @@ use crate::lookups::date_lookups as date;
 use crate::lookups::json_lookups as json;
 use crate::lookups::{self, LookupContext};
 use smallvec::SmallVec;
+use once_cell::sync::Lazy;
 use crate::symbols::{GLOBAL_INTERNER, Symbol};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use dashmap::DashMap;
 
 use super::helpers;
 pub use super::helpers::{apply_like_wrapping, qualified_col, split_qualified, KNOWN_TRANSFORMS};
 
 /// A specialized buffer for building SQL queries with minimal allocations.
-struct SqlWriter {
+pub struct SqlWriter {
     buf: String,
+    emit: bool,
 }
 
 impl SqlWriter {
-    fn new() -> Self {
+    fn new_emit() -> Self {
         Self {
             buf: String::with_capacity(256),
+            emit: true,
+        }
+    }
+
+    fn new_no_emit() -> Self {
+        Self {
+            buf: String::new(),
+            emit: false,
+        }
+    }
+
+    fn fork(&self) -> Self {
+        Self {
+            buf: String::with_capacity(64),
+            emit: self.emit,
         }
     }
 
     fn write(&mut self, s: &str) {
-        self.buf.push_str(s);
+        if self.emit {
+            self.buf.push_str(s);
+        }
     }
 
     fn write_quote(&mut self, s: &str) {
-        self.buf.push('"');
-        for c in s.chars() {
-            if c == '"' {
-                self.buf.push('"');
-                self.buf.push('"');
-            } else {
-                self.buf.push(c);
+        if self.emit {
+            self.buf.push('"');
+            for c in s.chars() {
+                if c == '"' {
+                    self.buf.push('"');
+                    self.buf.push('"');
+                } else {
+                    self.buf.push(c);
+                }
             }
+            self.buf.push('"');
         }
-        self.buf.push('"');
     }
 
     fn write_symbol(&mut self, sym: crate::symbols::Symbol) {
@@ -71,7 +95,7 @@ impl SqlWriter {
         self.write_qualified(&resolved);
     }
 
-    fn write_comma_separated<I, F>(&mut self, items: I, mut f: F)
+    fn write_comma_separated<I, F>(&mut self, items: I, f: F)
     where
         I: IntoIterator,
         F: FnMut(I::Item, &mut Self),
@@ -99,6 +123,17 @@ impl SqlWriter {
     }
 }
 
+/// Stable hash of the query shape (ignores parameter values).
+pub type PlanHash = u64;
+
+#[derive(Clone)]
+struct CachedPlan {
+    sql: String,
+}
+
+static PLAN_CACHE: Lazy<DashMap<PlanHash, CachedPlan>> =
+    Lazy::new(|| DashMap::with_capacity(1024));
+
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     pub sql: String,
@@ -109,7 +144,12 @@ pub struct CompiledQuery {
 
 pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
     let mut values: SmallVec<[SqlValue; 8]> = SmallVec::new();
-    let mut writer = SqlWriter::new();
+    let plan_hash = compute_plan_hash(node);
+    let mut writer = if PLAN_CACHE.contains_key(&plan_hash) {
+        SqlWriter::new_no_emit()
+    } else {
+        SqlWriter::new_emit()
+    };
     match &node.operation {
         QueryOperation::Select { columns } => {
             compile_select(node, columns.as_deref(), &mut values, &mut writer)?;
@@ -125,12 +165,118 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
             returning_id,
         } => compile_insert(node, cv, *returning_id, &mut values, &mut writer)?,
     };
+    let sql = if let Some(cached) = PLAN_CACHE.get(&plan_hash) {
+        cached.sql.clone()
+    } else {
+        let sql = writer.finish();
+        PLAN_CACHE.insert(plan_hash, CachedPlan { sql: sql.clone() });
+        sql
+    };
     Ok(CompiledQuery {
-        sql: writer.finish(),
+        sql,
         values,
         db_alias: node.db_alias.clone(),
         base_table: Some(GLOBAL_INTERNER.resolve(node.table)),
     })
+}
+
+fn compute_plan_hash(node: &QueryNode) -> PlanHash {
+    let mut h = DefaultHasher::new();
+    node.table.hash(&mut h);
+    node.backend.hash(&mut h);
+    node.distinct.hash(&mut h);
+    node.limit.hash(&mut h);
+    node.offset.hash(&mut h);
+    for ob in &node.order_by {
+        ob.field.hash(&mut h);
+        ob.direction.hash(&mut h);
+    }
+    for gb in &node.group_by {
+        gb.hash(&mut h);
+    }
+    for j in &node.joins {
+        j.kind.hash(&mut h);
+        j.table.hash(&mut h);
+        j.alias.hash(&mut h);
+        j.on_left.hash(&mut h);
+        j.on_right.hash(&mut h);
+    }
+    for f in &node.filters {
+        f.field.hash(&mut h);
+        f.lookup.hash(&mut h);
+        f.negated.hash(&mut h);
+    }
+    if let Some(q) = &node.q_filter {
+        hash_q(q, &mut h);
+    }
+    for a in &node.annotations {
+        a.alias.hash(&mut h);
+        a.func.sql_name().hash(&mut h);
+        a.field.hash(&mut h);
+        a.distinct.hash(&mut h);
+    }
+    match &node.operation {
+        QueryOperation::Select { columns } => {
+            1u8.hash(&mut h);
+            if let Some(cols) = columns {
+                for c in cols {
+                    c.hash(&mut h);
+                }
+            }
+        }
+        QueryOperation::Aggregate => 2u8.hash(&mut h),
+        QueryOperation::Count => 3u8.hash(&mut h),
+        QueryOperation::Delete => 4u8.hash(&mut h),
+        QueryOperation::Update { assignments } => {
+            5u8.hash(&mut h);
+            for (col, _) in assignments {
+                col.hash(&mut h);
+            }
+        }
+        QueryOperation::Insert {
+            values,
+            returning_id,
+        } => {
+            6u8.hash(&mut h);
+            returning_id.hash(&mut h);
+            for (col, _) in values {
+                col.hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+fn hash_q(q: &QNode, h: &mut DefaultHasher) {
+    match q {
+        QNode::Leaf {
+            field,
+            lookup,
+            negated,
+            ..
+        } => {
+            1u8.hash(h);
+            field.hash(h);
+            lookup.hash(h);
+            negated.hash(h);
+        }
+        QNode::And(children) => {
+            2u8.hash(h);
+            for c in children {
+                hash_q(c, h);
+            }
+        }
+        QNode::Or(children) => {
+            3u8.hash(h);
+            for c in children {
+                hash_q(c, h);
+            }
+        }
+        QNode::Not(child) => {
+            4u8.hash(h);
+            hash_q(child, h);
+        }
+    }
 }
 
 fn compile_select(
@@ -478,7 +624,7 @@ pub fn compile_q(
         QNode::And(children) => {
             writer.write("(");
             writer.write_separated(children, " AND ", |c, w| {
-                let mut child_writer = SqlWriter::new();
+                let mut child_writer = w.fork();
                 compile_q(c, values, backend, &mut child_writer).unwrap();
                 w.write(&child_writer.finish());
             });
@@ -488,7 +634,7 @@ pub fn compile_q(
         QNode::Or(children) => {
             writer.write("(");
             writer.write_separated(children, " OR ", |c, w| {
-                let mut child_writer = SqlWriter::new();
+                let mut child_writer = w.fork();
                 compile_q(c, values, backend, &mut child_writer).unwrap();
                 w.write(&child_writer.finish());
             });
@@ -497,7 +643,7 @@ pub fn compile_q(
         }
         QNode::Not(child) => {
             writer.write("NOT (");
-            let mut child_writer = SqlWriter::new();
+            let mut child_writer = writer.fork();
             compile_q(child, values, backend, &mut child_writer)?;
             writer.write(&child_writer.finish());
             writer.write(")");
