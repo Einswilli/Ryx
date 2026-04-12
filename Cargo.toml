@@ -85,6 +85,18 @@ once_cell = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Profiles — favor peak perf in release builds (used by maturin/pip wheels).
+# LTO thin keeps link times reasonable while enabling cross-crate inlining.
+# codegen-units=1 avoids missed inlining across crates.
+# ──────────────────────────────────────────────────────────────────────────────
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "debuginfo"
+panic = "unwind"
+
 [dev-dependencies]
 # tokio test macro for async unit tests
 tokio = { version = "1.40", features = ["full", "test-util"] }
