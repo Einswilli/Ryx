@@ -419,44 +419,14 @@ pub async fn bulk_delete(
         });
     }
     let pool = pool::get(db_alias.as_deref())?;
-    let backend = pool::get_backend(db_alias.as_deref())?;
-
-    let res = match backend {
-        ryx_query::Backend::PostgreSQL => {
-            // Use array binding: DELETE ... WHERE pk = ANY($1)
-            let ints: Vec<i64> = pks
-                .iter()
-                .filter_map(|v| match v {
-                    SqlValue::Int(i) => Some(*i),
-                    _ => None,
-                })
-                .collect();
-            // Use AnyArguments to bind an array via encode
-            let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" = ANY($1::bigint[])", table, pk_col);
-            // We cannot bind Vec<i64> directly on Any without a typed array, so fallback to text list
-            let placeholders = ints
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            let sql_full = sql.replace("$1", &format!("ARRAY[{}]", placeholders));
-            sqlx::query(&sql_full)
-                .execute(pool.as_ref())
-                .await
-                .map_err(RyxError::Database)?
-        }
-        _ => {
-            // Fallback: IN (?, ?, ...)
-            let ph = std::iter::repeat("?")
-                .take(pks.len())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" IN ({})", table, pk_col, ph);
-            let mut q = sqlx::query(&sql);
-            q = bind_values(q, &pks);
-            q.execute(pool.as_ref()).await.map_err(RyxError::Database)?
-        }
-    };
+    let ph = std::iter::repeat("?")
+        .take(pks.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" IN ({})", table, pk_col, ph);
+    let mut q = sqlx::query(&sql);
+    q = bind_values(q, &pks);
+    let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
     Ok(MutationResult {
         rows_affected: res.rows_affected(),
         last_insert_id: None,
@@ -474,7 +444,6 @@ pub async fn bulk_update(
     db_alias: Option<String>,
 ) -> RyxResult<MutationResult> {
     let pool = pool::get(db_alias.as_deref())?;
-    let backend = pool::get_backend(db_alias.as_deref())?;
     let n = pks.len();
     let f = field_values.len();
     if n == 0 || f == 0 {
@@ -485,93 +454,42 @@ pub async fn bulk_update(
         });
     }
 
-    match backend {
-        ryx_query::Backend::PostgreSQL | ryx_query::Backend::MySQL => {
-            // Build VALUES table: (pk, c1, c2, ...)
-            // SQL: UPDATE "table" AS t SET c1 = v.c1, c2 = v.c2 FROM (VALUES (...)) AS v(pk, c1, c2) WHERE t.pk = v.pk
-            let mut values_sql = String::with_capacity(n * (f + 1) * 4);
-            let mut all_vals: SmallVec<[SqlValue; 8]> = SmallVec::with_capacity(n * (f + 1));
-            for (row_idx, pk) in pks.iter().enumerate() {
-                if row_idx > 0 {
-                    values_sql.push_str(", ");
-                }
-                values_sql.push('(');
-                values_sql.push_str(&std::iter::repeat("?").take(f + 1).collect::<Vec<_>>().join(", "));
-                values_sql.push(')');
-                all_vals.push(pk.clone());
-                for col_vals in &field_values {
-                    all_vals.push(col_vals[row_idx].clone());
-                }
-            }
-            let mut col_list = String::from(pk_col.as_str());
-            for c in &col_names {
-                col_list.push_str(", ");
-                col_list.push_str(c);
-            }
-            let assignments = col_names
-                .iter()
-                .map(|c| format!("\"{}\" = v.{}", c, c))
-                .collect::<Vec<_>>()
-                .join(", ");
+    let mut case_clauses = Vec::with_capacity(f);
+    let mut all_values: SmallVec<[SqlValue; 8]> = SmallVec::with_capacity(n * f * 2 + n);
 
-            let sql = format!(
-                "UPDATE \"{table}\" AS t SET {assignments} FROM (VALUES {values_sql}) AS v({col_list}) WHERE t.\"{pk}\" = v.{pk}",
-                table = table,
-                assignments = assignments,
-                values_sql = values_sql,
-                col_list = col_list,
-                pk = pk_col
-            );
-            let mut q = sqlx::query(&sql);
-            q = bind_values(q, &all_vals);
-            let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
-            Ok(MutationResult {
-                rows_affected: res.rows_affected(),
-                last_insert_id: None,
-                returned_ids: None,
-            })
+    for (fi, col_name) in col_names.iter().enumerate() {
+        let mut case_parts = Vec::with_capacity(n * 3 + 2);
+        case_parts.push(format!("\"{}\" = CASE \"{}\"", col_name, pk_col));
+        for i in 0..n {
+            case_parts.push("WHEN ? THEN ?".to_string());
+            all_values.push(pks[i].clone());
+            all_values.push(field_values[fi][i].clone());
         }
-        ryx_query::Backend::SQLite => {
-            // Keep CASE WHEN for SQLite
-            let mut case_clauses = Vec::with_capacity(f);
-            let mut all_values: SmallVec<[SqlValue; 8]> =
-                SmallVec::with_capacity(n * f * 2 + n);
-
-            for (fi, col_name) in col_names.iter().enumerate() {
-                let mut case_parts = Vec::with_capacity(n * 3 + 2);
-                case_parts.push(format!("\"{}\" = CASE \"{}\"", col_name, pk_col));
-                for i in 0..n {
-                    case_parts.push("WHEN ? THEN ?".to_string());
-                    all_values.push(pks[i].clone());
-                    all_values.push(field_values[fi][i].clone());
-                }
-                case_parts.push("END".to_string());
-                case_clauses.push(case_parts.join(" "));
-            }
-
-            let pk_placeholders: Vec<String> = (0..n).map(|_| "?".to_string()).collect();
-            for pk in &pks {
-                all_values.push(pk.clone());
-            }
-
-            let sql = format!(
-                "UPDATE \"{}\" SET {} WHERE \"{}\" IN ({})",
-                table,
-                case_clauses.join(", "),
-                pk_col,
-                pk_placeholders.join(", ")
-            );
-
-            let mut q = sqlx::query(&sql);
-            q = bind_values(q, &all_values);
-            let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
-            Ok(MutationResult {
-                rows_affected: res.rows_affected(),
-                last_insert_id: None,
-                returned_ids: None,
-            })
-        }
+        case_parts.push("END".to_string());
+        case_clauses.push(case_parts.join(" "));
     }
+
+    let pk_placeholders: Vec<String> = (0..n).map(|_| "?".to_string()).collect();
+    for pk in &pks {
+        all_values.push(pk.clone());
+    }
+
+    let sql = format!(
+        "UPDATE \"{}\" SET {} WHERE \"{}\" IN ({})",
+        table,
+        case_clauses.join(", "),
+        pk_col,
+        pk_placeholders.join(", ")
+    );
+
+    let mut q = sqlx::query(&sql);
+    q = bind_values(q, &all_values);
+    let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
+    Ok(MutationResult {
+        rows_affected: res.rows_affected(),
+        last_insert_id: None,
+        returned_ids: None,
+    })
 }
 
 /// Execute raw SQL without bind params.
