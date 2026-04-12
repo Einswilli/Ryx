@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Database backend type.
 /// Used for backend-specific SQL generation (e.g., DATE() vs strftime()).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Backend {
     PostgreSQL,
     MySQL,
