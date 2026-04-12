@@ -26,13 +26,13 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
- 
+
 use sqlx::{
     AnyPool,
     any::{AnyPoolOptions, install_default_drivers},
 };
 use tracing::{debug, info};
- 
+
 use crate::errors::{RyxError, RyxResult};
 use ryx_query::Backend;
 
@@ -47,7 +47,6 @@ pub struct PoolRegistry {
 
 /// Global singleton for the pool registry.
 static REGISTRY: OnceLock<RwLock<PoolRegistry>> = OnceLock::new();
-
 
 // ###
 // Pool configuration options
@@ -110,24 +109,29 @@ impl Default for PoolConfig {
 /// # Errors
 /// - [`RyxError::PoolAlreadyInitialized`] if called more than once
 /// - [`RyxError::Database`] if any URL is invalid or DB is unreachable
-pub async fn initialize(database_urls: HashMap<String, String>, config: PoolConfig) -> RyxResult<()> {
+pub async fn initialize(
+    database_urls: HashMap<String, String>,
+    config: PoolConfig,
+) -> RyxResult<()> {
     // Register all built-in sqlx drivers with AnyPool.
     install_default_drivers();
- 
+
     if database_urls.is_empty() {
-        return Err(RyxError::Internal("No database URLs provided for initialization".into()));
+        return Err(RyxError::Internal(
+            "No database URLs provided for initialization".into(),
+        ));
     }
 
     debug!(urls = ?database_urls, "Initializing Ryx connection pool registry");
- 
+
     let mut pools = HashMap::new();
     let mut first_alias = None;
- 
+
     for (alias, url) in database_urls {
         if first_alias.is_none() {
             first_alias = Some(alias.clone());
         }
- 
+
         let pool = AnyPoolOptions::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
@@ -137,30 +141,31 @@ pub async fn initialize(database_urls: HashMap<String, String>, config: PoolConf
             .connect(&url)
             .await
             .map_err(RyxError::Database)?;
- 
+
         let backend = ryx_query::backend::detect_backend(&url);
         pools.insert(alias, (Arc::new(pool), backend));
     }
- 
+
     // Determine the default alias
     let default_alias = if pools.contains_key("default") {
         "default".to_string()
     } else {
         first_alias.expect("Registry cannot be empty")
     };
- 
+
     let registry = PoolRegistry {
         pools,
         default_alias,
     };
- 
-    REGISTRY.set(RwLock::new(registry))
+
+    REGISTRY
+        .set(RwLock::new(registry))
         .map_err(|_| RyxError::PoolAlreadyInitialized)?;
- 
+
     info!("Ryx connection pool registry initialized successfully");
     Ok(())
 }
- 
+
 /// Retrieve a reference to a specific connection pool.
 ///
 /// # Arguments
@@ -172,21 +177,23 @@ pub async fn initialize(database_urls: HashMap<String, String>, config: PoolConf
 pub fn get(alias: Option<&str>) -> RyxResult<Arc<AnyPool>> {
     let registry_lock = REGISTRY.get().ok_or(RyxError::PoolNotInitialized)?;
     let registry = registry_lock.read().unwrap();
- 
+
     let target_alias = alias.unwrap_or(&registry.default_alias);
-    
-    registry.pools.get(target_alias)
+
+    registry
+        .pools
+        .get(target_alias)
         .map(|(pool, _)| pool.clone())
         .ok_or_else(|| RyxError::Internal(format!("Database pool '{}' not found", target_alias)))
 }
- 
+
 /// Check whether the pool registry has been initialized.
 pub fn is_initialized(alias: Option<String>) -> bool {
-    
     // Alias provided
-    if alias.is_some(){
+    if alias.is_some() {
         REGISTRY.get().is_some_and(|f| {
-            f.read().is_ok_and(|pc| pc.pools.contains_key(alias.unwrap().as_str()))
+            f.read()
+                .is_ok_and(|pc| pc.pools.contains_key(alias.unwrap().as_str()))
         })
     }
     // Else is the registry not none?
@@ -194,7 +201,7 @@ pub fn is_initialized(alias: Option<String>) -> bool {
         REGISTRY.get().is_some()
     }
 }
- 
+
 /// Return a list of all configured database aliases.
 pub fn list_aliases() -> RyxResult<Vec<String>> {
     let registry_lock = REGISTRY.get().ok_or(RyxError::PoolNotInitialized)?;
@@ -210,21 +217,23 @@ pub fn list_aliases() -> RyxResult<Vec<String>> {
 pub fn get_backend(alias: Option<&str>) -> RyxResult<Backend> {
     let registry_lock = REGISTRY.get().ok_or(RyxError::PoolNotInitialized)?;
     let registry = registry_lock.read().unwrap();
- 
+
     let target_alias = alias.unwrap_or(&registry.default_alias);
-    
-    registry.pools.get(target_alias)
+
+    registry
+        .pools
+        .get(target_alias)
         .map(|(_, backend)| *backend)
         .ok_or_else(|| RyxError::Internal(format!("Database pool '{}' not found", target_alias)))
 }
- 
+
 /// Return pool statistics for a specific pool.
 #[derive(Debug)]
 pub struct PoolStats {
     pub size: u32,
     pub idle: u32,
 }
- 
+
 /// Retrieve current pool statistics for a specific pool.
 pub fn stats(alias: Option<&str>) -> RyxResult<PoolStats> {
     let pool = get(alias)?;

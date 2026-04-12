@@ -27,6 +27,7 @@ pub struct CompiledQuery {
     pub sql: String,
     pub values: SmallVec<[SqlValue; 8]>,
     pub db_alias: Option<String>,
+    pub base_table: Option<String>,
 }
 
 pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
@@ -48,6 +49,7 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
         sql,
         values,
         db_alias: node.db_alias.clone(),
+        base_table: Some(node.table.clone()),
     })
 }
 

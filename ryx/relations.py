@@ -60,8 +60,6 @@ async def apply_select_related(
     """
 
     model = qs._model
-    builder = qs._builder
-
     # Track which related models we've joined and their column prefix
     joins: Dict[str, type] = {}  # field_name → related_model_class
 
@@ -88,16 +86,17 @@ async def apply_select_related(
         # Add LEFT OUTER JOIN
         # ON: parent_table.author_id = _sr_author.id
         pk_col = related_model._meta.pk_field.column if related_model._meta.pk_field else "id"
-        builder = builder.add_join(
-            "LEFT",
+        qs = qs.join(
             related_table,
-            alias,
-            f"{model._meta.table_name}.{field.column}",  # e.g. posts.author_id
-            f"{alias}.{pk_col}",                          # e.g. _sr_author.id
+            f"{model._meta.table_name}.{field.column} = {alias}.{pk_col}",
+            alias=alias,
+            kind="LEFT",
         )
         joins[field_name] = related_model
 
     # Execute the query
+    alias = qs._resolve_db_alias("read")
+    builder = qs._materialize_builder(alias)
     raw_rows = await builder.fetch_all()
 
     # Reconstruct instances

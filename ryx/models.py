@@ -396,6 +396,34 @@ class ModelMetaclass(type):
         except Exception:
             pass  # never let descriptor resolution crash model creation
 
+        # Register model metadata in Rust (single source of truth for fast-paths)
+        try:
+            field_specs = []
+            for f in opts.fields.values():
+                field_specs.append(
+                    (
+                        f.attname,
+                        f.column,
+                        getattr(f, "primary_key", False),
+                        f.__class__.__name__,
+                        getattr(f, "null", False),
+                        getattr(f, "unique", False),
+                    )
+                )
+            _core.register_model_spec(
+                name,
+                opts.table_name,
+                opts.app_label or None,
+                opts.database or None,
+                opts.ordering or None,
+                opts.managed,
+                opts.abstract,
+                field_specs,
+            )
+        except Exception:
+            # Best-effort only; never break model definition
+            pass
+
         return cls
 
 

@@ -191,18 +191,17 @@ impl TransactionHandle {
                 let mut map = std::collections::HashMap::new();
                 for col in row.columns() {
                     let name = col.name().to_string();
-                    let val =
-                        if let Ok(b) = row.try_get::<bool, _>(col.ordinal()) {
-                            SqlValue::Bool(b)
-                        } else if let Ok(i) = row.try_get::<i64, _>(col.ordinal()) {
-                            SqlValue::Int(i)
-                        } else if let Ok(f) = row.try_get::<f64, _>(col.ordinal()) {
-                            SqlValue::Float(f)
-                        } else if let Ok(s) = row.try_get::<String, _>(col.ordinal()) {
-                            SqlValue::Text(s)
-                        } else {
-                            SqlValue::Null
-                        };
+                    let val = if let Ok(b) = row.try_get::<bool, _>(col.ordinal()) {
+                        SqlValue::Bool(b)
+                    } else if let Ok(i) = row.try_get::<i64, _>(col.ordinal()) {
+                        SqlValue::Int(i)
+                    } else if let Ok(f) = row.try_get::<f64, _>(col.ordinal()) {
+                        SqlValue::Float(f)
+                    } else if let Ok(s) = row.try_get::<String, _>(col.ordinal()) {
+                        SqlValue::Text(s)
+                    } else {
+                        SqlValue::Null
+                    };
                     map.insert(name, val);
                 }
                 map
