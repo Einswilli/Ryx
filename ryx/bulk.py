@@ -25,31 +25,39 @@ Design notes:
 
 from __future__ import annotations
 
-from typing import List, Sequence, Type, TYPE_CHECKING
+from typing import List, Sequence, Type, TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ryx.models import Model
 
 from ryx import ryx_core as _core
+from ryx.router import get_router
 
 
-def _detect_backend() -> str:
-    """Detect the database backend from the RYX_DATABASE_URL env var.
+def _resolve_alias(model: "Model") -> Optional[str]:
+    """Resolve DB alias using Router → Meta.database → default(None)."""
+    router = get_router()
+    alias = router.db_for_write(model) if router else None
+    if not alias:
+        alias = model._meta.database
+    return alias
 
-    Returns one of: "sqlite", "postgres", "mysql".
-    Falls back to "sqlite" if the URL cannot be parsed.
-    """
-    import os
 
-    url = os.environ.get("RYX_DATABASE_URL", "").lower()
-    if url.startswith("postgres://") or url.startswith("postgresql://"):
-        return "postgres"
-    if url.startswith("mysql://") or url.startswith("mariadb://"):
-        return "mysql"
-    if url.startswith("sqlite://"):
+def _detect_backend(alias: str | None) -> str:
+    """Ask core for backend; fallback to env parsing if pool is not ready."""
+    try:
+        return _core.get_backend(alias).lower()
+    except Exception:
+        import os
+
+        url = os.environ.get("RYX_DATABASE_URL", "").lower()
+        if url.startswith("postgres://") or url.startswith("postgresql://"):
+            return "postgres"
+        if url.startswith("mysql://") or url.startswith("mariadb://"):
+            return "mysql"
+        if url.startswith("sqlite://"):
+            return "sqlite"
         return "sqlite"
-    # Default to sqlite for local development
-    return "sqlite"
 
 
 ####    bulk_create
@@ -114,27 +122,31 @@ async def bulk_create(
     pk_field = model._meta.pk_field
 
     # Process in batches — all SQL and execution handled in Rust
-    backend = _detect_backend()
+    alias = _resolve_alias(model)
+    backend = _detect_backend(alias)
     for batch in _chunked(instances, batch_size):
         rows = [[f.to_db(getattr(inst, f.attname)) for f in fields] for inst in batch]
         # Returning IDs is expensive on SQLite/MySQL; we only request it on Postgres.
-        returning_ids = backend == "postgres"
+        returning_ids = backend.startswith("postgres")
         res = await _core.bulk_insert(
             model._meta.table_name,
             col_names,
             rows,
             returning_ids,
             ignore_conflicts,
+            alias,
         )
         if pk_field:
             if isinstance(res, list):
                 # Returned IDs (Postgres or SQLite RETURNING)
                 for inst, pk in zip(batch, res):
                     object.__setattr__(inst, pk_field.attname, pk)
-            elif isinstance(res, int) and backend == "sqlite":
+            elif isinstance(res, int) and backend.startswith("sqlite"):
                 # res is rows_affected; compute PKs from last_insert_rowid()
                 # This relies on SQLite's rowid continuity for multi-row inserts.
-                last_id_rows = await _core.raw_fetch("SELECT last_insert_rowid() as id", None)
+                last_id_rows = await _core.raw_fetch(
+                    "SELECT last_insert_rowid() as id", alias
+                )
                 if last_id_rows and isinstance(last_id_rows, list) and last_id_rows[0].get("id") is not None:
                     last = int(last_id_rows[0]["id"])
                     start = last - len(batch) + 1
@@ -299,11 +311,14 @@ async def bulk_update(
         if not col_names:
             continue
 
+        alias = _resolve_alias(model)
         result = await _core.bulk_update(
             table,
             pk_col,
-            list(zip(col_names,field_values)),
+            col_names,
+            field_values,
             pks,
+            alias,
         )
         total += result
 
@@ -343,12 +358,11 @@ async def bulk_delete(
     if not pks:
         return 0
 
-    from ryx import ryx_core as _core
-
     total = 0
+    alias = _resolve_alias(model)
     for batch in _chunked(pks, batch_size):
         total += await _core.bulk_delete(
-            model._meta.table_name, pk_field.column, list(batch)
+            model._meta.table_name, pk_field.column, list(batch), alias
         )
     return total
 

@@ -22,6 +22,7 @@ use ryx_query::ast::{
 };
 use ryx_query::compiler;
 use ryx_query::lookups;
+use ryx_query::symbols::Symbol;
 
 // ###
 // Setup / pool functions
@@ -189,7 +190,7 @@ impl PyQueryBuilder {
         let sql_value = py_to_sql_value(value)?;
         Ok(PyQueryBuilder {
             node: Arc::new(self.node.as_ref().clone().with_filter(FilterNode {
-                field,
+                field: field.into(),
                 lookup,
                 value: sql_value,
                 negated,
@@ -207,7 +208,7 @@ impl PyQueryBuilder {
         for (field, lookup, value, negated) in filters {
             let sql_value = py_to_sql_value(&value)?;
             node = node.with_filter(FilterNode {
-                field,
+                field: field.into(),
                 lookup,
                 value: sql_value,
                 negated,
@@ -242,9 +243,9 @@ impl PyQueryBuilder {
         };
         PyQueryBuilder {
             node: Arc::new(self.node.as_ref().clone().with_annotation(AggregateExpr {
-                alias,
+                alias: alias.into(),
                 func: agg_func,
-                field,
+                field: field.into(),
                 distinct,
             })),
         }
@@ -271,11 +272,11 @@ impl PyQueryBuilder {
             "CROSS" => JoinKind::CrossJoin,
             _ => JoinKind::Inner,
         };
-        let alias_opt = if alias.is_empty() { None } else { Some(alias) };
+        let alias_opt = if alias.is_empty() { None } else { Some(alias.into()) };
         PyQueryBuilder {
             node: Arc::new(self.node.as_ref().clone().with_join(JoinClause {
                 kind: join_kind,
-                table,
+                table: table.into(),
                 alias: alias_opt,
                 on_left,
                 on_right,
@@ -401,9 +402,9 @@ impl PyQueryBuilder {
         py: Python<'py>,
         assignments: Vec<(String, Bound<'_, PyAny>)>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let rust_assignments: Vec<(String, SqlValue)> = assignments
+        let rust_assignments: Vec<(Symbol, SqlValue)> = assignments
             .into_iter()
-            .map(|(col, val)| Ok::<_, PyErr>((col, py_to_sql_value(&val)?)))
+            .map(|(col, val)| Ok::<_, PyErr>((col.into(), py_to_sql_value(&val)?)))
             .collect::<Result<_, _>>()?;
 
         let mut upd_node = self.node.as_ref().clone();
@@ -425,9 +426,9 @@ impl PyQueryBuilder {
         values: Vec<(String, Bound<'_, PyAny>)>,
         returning_id: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let rust_values: Vec<(String, SqlValue)> = values
+        let rust_values: Vec<(Symbol, SqlValue)> = values
             .into_iter()
-            .map(|(col, val)| Ok::<_, PyErr>((col, py_to_sql_value(&val)?)))
+            .map(|(col, val)| Ok::<_, PyErr>((col.into(), py_to_sql_value(&val)?)))
             .collect::<Result<_, _>>()?;
 
         let mut ins_node = self.node.as_ref().clone();
@@ -440,9 +441,14 @@ impl PyQueryBuilder {
             let res = executor::execute_compiled(ins_node)
                 .await
                 .map_err(PyErr::from)?;
-            Python::attach(|py| match res.last_insert_id {
-                Some(id) => Ok(id.into_pyobject(py)?.unbind()),
-                None => Ok(res.rows_affected.into_pyobject(py)?.unbind()),
+            Python::attach(|py| {
+                if let Some(ids) = res.returned_ids {
+                    Ok(ids.into_pyobject(py)?.into_any().unbind())
+                } else if let Some(id) = res.last_insert_id {
+                    Ok(id.into_pyobject(py)?.into_any().unbind())
+                } else {
+                    Ok(res.rows_affected.into_pyobject(py)?.into_any().unbind())
+                }
             })
         })
     }
@@ -532,7 +538,7 @@ pub(crate) fn py_dict_to_qnode(obj: &Bound<'_, PyAny>) -> PyResult<QNode> {
                 .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("leaf missing value"))?;
             let value = py_to_sql_value(&value_obj)?;
             Ok(QNode::Leaf {
-                field,
+                field: field.into(),
                 lookup,
                 value,
                 negated,
@@ -792,17 +798,19 @@ fn fetch_with_params<'py>(
 ///
 /// But avoids 3 separate FFI crossings and intermediate allocations.
 #[pyfunction]
+#[pyo3(signature = (table, pk_col, pks, alias=None))]
 fn bulk_delete<'py>(
     py: Python<'py>,
     table: String,
     pk_col: String,
     pks: Vec<Bound<'_, PyAny>>,
+    alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let pk_list = PyList::new(py, pks)?;
     let pk_values = py_int_list_to_sql_values(&pk_list)?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = executor::bulk_delete(table, pk_col, pk_values, None)
+        let result = executor::bulk_delete(table, pk_col, pk_values, alias)
             .await
             .map_err(PyErr::from)?;
         Python::attach(|py| {
@@ -814,7 +822,7 @@ fn bulk_delete<'py>(
 
 /// Bulk insert: values are mapped in Rust then executed in a single FFI call.
 #[pyfunction]
-#[pyo3(signature = (table, columns, rows, returning_id=true, ignore_conflicts=false))]
+#[pyo3(signature = (table, columns, rows, returning_id=true, ignore_conflicts=false, alias=None))]
 fn bulk_insert<'py>(
     py: Python<'py>,
     table: String,
@@ -822,6 +830,7 @@ fn bulk_insert<'py>(
     rows: Vec<Vec<Bound<'_, PyAny>>>,
     returning_id: bool,
     ignore_conflicts: bool,
+    alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let mut rust_rows: Vec<Vec<SqlValue>> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -839,58 +848,63 @@ fn bulk_insert<'py>(
             rust_rows,
             returning_id,
             ignore_conflicts,
-            None,
+            alias,
         )
         .await
         .map_err(PyErr::from)?;
-        Python::attach(|py| match res.last_insert_id {
-            Some(id) => Ok(id.into_pyobject(py)?.unbind()),
-            None => Ok(res.rows_affected.into_pyobject(py)?.unbind()),
+        Python::attach(|py| {
+            if let Some(ids) = res.returned_ids {
+                Ok(ids.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(id) = res.last_insert_id {
+                Ok(id.into_pyobject(py)?.into_any().unbind())
+            } else {
+                Ok(res.rows_affected.into_pyobject(py)?.into_any().unbind())
+            }
         })
     })
 }
 
-/// Bulk update using CASE WHEN in a single FFI call.
-///
-/// Builds a single UPDATE statement with CASE WHEN clauses:
-///   UPDATE "table" SET
-///       "col1" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END,
-///       "col2" = CASE "pk" WHEN 1 THEN ? WHEN 2 THEN ? END
-///   WHERE "pk" IN (?, ?, ...)
-///
-/// All values are passed as a flat list: [pk1, val1, pk2, val2, ..., pk1, pk2, ...]
-/// where the first N*F values are the CASE WHEN pairs (N rows × F fields)
-/// and the last N values are the WHERE IN clause.
+/// Bulk update using CASE WHEN in a single FFI call (multi-db aware).
 #[pyfunction]
+#[pyo3(signature = (table, pk_col, columns, field_values, pks, alias=None))]
 fn bulk_update<'py>(
     py: Python<'py>,
     table: String,
     pk_col: String,
-    // List of (column_name, list_of_values) tuples
-    // Each list_of_values has the same length as pks
-    columns: Vec<(String, Vec<Bound<'_, PyAny>>)>,
+    columns: Vec<String>,
+    field_values: Vec<Vec<Bound<'_, PyAny>>>,
     pks: Vec<Bound<'_, PyAny>>,
+    alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // Convert PKs to integers (fast path)
+    if field_values.len() != columns.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "columns and field_values length mismatch",
+        ));
+    }
+
     let pk_list = PyList::new(py, pks.clone())?;
     let pk_values = py_int_list_to_sql_values(&pk_list)?;
 
-    // Convert all field values
-    let mut field_values: Vec<Vec<SqlValue>> = Vec::with_capacity(columns.len());
-    let mut col_names: Vec<String> = Vec::with_capacity(columns.len());
-    for (col_name, vals) in columns {
+    let mut rust_field_values: Vec<Vec<SqlValue>> = Vec::with_capacity(columns.len());
+    for vals in field_values {
         let sql_vals: Vec<SqlValue> = vals
             .iter()
             .map(|v| py_to_sql_value(v))
             .collect::<PyResult<_>>()?;
-        field_values.push(sql_vals);
-        col_names.push(col_name);
+        rust_field_values.push(sql_vals);
     }
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = executor::bulk_update(table, pk_col, col_names, field_values, pk_values, None)
-            .await
-            .map_err(PyErr::from)?;
+        let result = executor::bulk_update(
+            table,
+            pk_col,
+            columns,
+            rust_field_values,
+            pk_values,
+            alias,
+        )
+        .await
+        .map_err(PyErr::from)?;
         Python::attach(|py| {
             let n = (result.rows_affected as i64).into_pyobject(py)?;
             Ok(n.unbind())
