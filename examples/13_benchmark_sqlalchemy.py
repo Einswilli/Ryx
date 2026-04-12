@@ -36,7 +36,7 @@ DB_PATH = Path(__file__).parent.parent / "ryx_bench.sqlite3"
 DATABASE_URL = f"sqlite://{DB_PATH}?mode=rwc"
 os.environ["RYX_DATABASE_URL"] = DATABASE_URL
 
-N = 1000  # Number of rows for bulk operations
+N = 10_000  # Number of rows for bulk operations
 
 
 #
