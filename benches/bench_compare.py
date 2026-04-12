@@ -1,332 +1,344 @@
 """
-Benchmark helper to compare Ryx vs SQLAlchemy on SQLite/Postgres.
+Ryx ORM — Benchmark vs SQLAlchemy (inspired by examples/13_benchmark_sqlalchemy.py)
 
-Usage:
-  RYX_DATABASE_URL=sqlite:///bench.db python benches/bench_compare.py
-  RYX_DATABASE_URL=postgresql://user:pass@localhost:5432/db python benches/bench_compare.py
-
-This script aims to reproduce the 10k-row table of operations:
+Measures (N=10_000):
   - bulk_create
-  - filter_query
-  - aggregate
-  - bulk_update
-  - bulk_delete
+  - filter_query (category + is_active, order + limit)
+  - aggregate (count, sum, avg)
+  - bulk_update (price += 100 where is_active=1)
+  - bulk_delete (category = 'B')
 
-It prints a table similar to the one shared in the thread.
+Supports SQLite and Postgres depending on RYX_DATABASE_URL.
 """
 
 import asyncio
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable, List
+from typing import Dict
 
-import sqlalchemy as sa
-from sqlalchemy import Column, Integer, String, Boolean, select, func, text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import declarative_base, sessionmaker
-
-from ryx import ryx_core as _core
-from ryx.bulk import bulk_create, bulk_update, bulk_delete
-
-Base = declarative_base()
+import ryx
+from ryx import Model, CharField, IntField
+from ryx.migrations import MigrationRunner
+from ryx.executor_helpers import raw_fetch, raw_execute
 
 
-class Item(Base):
-    __tablename__ = "bench_items"
-    id = Column(Integer, primary_key=True)
-    name = Column(String)
-    active = Column(Boolean, default=True)
-    value = Column(Integer)
+N = 10_000
+DEFAULT_SQLITE = "sqlite:///bench.sqlite3?mode=rwc"
 
 
-@dataclass
-class BenchResult:
-    name: str
-    ryx_orm: float
-    sa_orm: float
-    sa_core: float
-    ryx_raw: float
-
-
-async def setup_sa_engine(url: str):
-    engine = create_async_engine(url, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    return engine
-
-
-async def setup_ryx(url: str):
-    # One alias: default
-    await _core.setup({"default": url})
+def sa_async_url_from_env(url: str) -> str:
+    if url.startswith("sqlite://"):
+        # sqlalchemy async driver
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url
 
 
-async def bench_bulk_create(session_maker, count: int = 10_000):
-    # SA ORM
-    async with session_maker() as s:
-        objs = [Item(name=f"i{i}", active=True, value=i) for i in range(count)]
-        t0 = time.perf_counter()
-        s.add_all(objs)
-        await s.commit()
-        sa_time = time.perf_counter() - t0
-    # SA Core
-    async with session_maker() as s:
-        t0 = time.perf_counter()
-        await s.execute(
-            Item.__table__.insert(),
-            [{"name": f"c{i}", "active": True, "value": i} for i in range(count)],
+class RyxItem(Model):
+    class Meta:
+        table_name = "bench_items"
+
+    name = CharField(max_length=100)
+    category = CharField(max_length=50)
+    price = IntField(default=0)
+    is_active = IntField(default=1)
+
+
+@dataclass
+class Row:
+    bulk_create: float
+    filter_query: float
+    aggregate: float
+    bulk_update: float
+    bulk_delete: float
+
+
+async def bench_ryx(url: str) -> Row:
+    await ryx.setup(url)
+    runner = MigrationRunner([RyxItem])
+    await runner.migrate()
+
+    # bulk_create
+    items = [
+        RyxItem(
+            name=f"Item {i}",
+            category="A" if i % 2 == 0 else "B",
+            price=i * 10,
+            is_active=1 if i % 3 != 0 else 0,
         )
-        await s.commit()
-        sa_core_time = time.perf_counter() - t0
-    # Ryx ORM (via bulk_create)
-    from ryx.models import Model, IntegerField, BooleanField, CharField
+        for i in range(N)
+    ]
+    t0 = time.monotonic()
+    await RyxItem.objects.bulk_create(items, batch_size=1000)
+    t_bulk_create = time.monotonic() - t0
 
-    class RItem(Model):
-        name = CharField()
-        active = BooleanField()
-        value = IntegerField()
+    # filter_query
+    t0 = time.monotonic()
+    await RyxItem.objects.filter(category="A", is_active=1).order_by("-price")[:50]
+    t_filter = time.monotonic() - t0
 
-        class Meta:
-            table = "bench_items"
-
-    await _core.raw_execute('DELETE FROM "bench_items"', None)
-    items = [RItem(name=f"r{i}", active=True, value=i) for i in range(count)]
-    t0 = time.perf_counter()
-    await bulk_create(RItem, items, batch_size=1000)
-    ryx_time = time.perf_counter() - t0
-
-    # Ryx raw
-    await _core.raw_execute('DELETE FROM "bench_items"', None)
-    t0 = time.perf_counter()
-    values = ", ".join([f"('{i}', true, {i})" for i in range(count)])
-    await _core.raw_execute(
-        f'INSERT INTO "bench_items" ("name","active","value") VALUES {values}', None
+    # aggregate
+    t0 = time.monotonic()
+    await RyxItem.objects.filter(category="A").aggregate(
+        total=ryx.Count("id"),
+        total_price=ryx.Sum("price"),
+        avg_price=ryx.Avg("price"),
     )
-    ryx_raw_time = time.perf_counter() - t0
-    return BenchResult("bulk_create", ryx_time, sa_time, sa_core_time, ryx_raw_time)
+    t_agg = time.monotonic() - t0
+
+    # bulk_update (price += 100 where active)
+    active = await RyxItem.objects.filter(is_active=1)
+    for it in active:
+        it.price += 100
+    t0 = time.monotonic()
+    await RyxItem.objects.bulk_update(active, ["price"], batch_size=1000)
+    t_update = time.monotonic() - t0
+
+    # bulk_delete (category B)
+    t0 = time.monotonic()
+    await RyxItem.objects.filter(category="B").delete()
+    t_delete = time.monotonic() - t0
+
+    return Row(t_bulk_create, t_filter, t_agg, t_update, t_delete)
 
 
-async def bench_filter(session_maker):
-    async def sa_orm():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            res = await s.execute(select(Item).where(Item.value > 5000))
-            _ = res.scalars().all()
-            return time.perf_counter() - t0
+async def bench_ryx_raw(url: str) -> Row:
+    # assumes table exists and filled by Ryx bench
+    # bulk_create raw
+    values = ", ".join(
+        [
+            f"('Raw {i}','A', {i*10}, 1)"
+            for i in range(N)
+        ]
+    )
+    t0 = time.monotonic()
+    await raw_execute(
+        f'INSERT INTO "bench_items" ("name","category","price","is_active") VALUES {values}',
+        None,
+    )
+    t_bulk_create = time.monotonic() - t0
 
-    async def sa_core():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            res = await s.execute(select(Item).where(Item.value > 5000))
-            _ = res.fetchall()
-            return time.perf_counter() - t0
+    t0 = time.monotonic()
+    await raw_fetch(
+        'SELECT * FROM "bench_items" WHERE "category" = \'A\' AND "is_active" = 1 ORDER BY "price" DESC LIMIT 50',
+        None,
+    )
+    t_filter = time.monotonic() - t0
 
-    async def ryx_orm():
-        from ryx.models import Model, IntegerField, BooleanField, CharField
+    t0 = time.monotonic()
+    await raw_fetch(
+        'SELECT COUNT(*) AS total, SUM("price") AS total_price, AVG("price") AS avg_price FROM "bench_items" WHERE "category" = \'A\'',
+        None,
+    )
+    t_agg = time.monotonic() - t0
 
-        class RItem(Model):
-            name = CharField()
-            active = BooleanField()
-            value = IntegerField()
+    t0 = time.monotonic()
+    await raw_execute(
+        'UPDATE "bench_items" SET "price" = "price" + 100 WHERE "is_active" = 1',
+        None,
+    )
+    t_update = time.monotonic() - t0
 
-            class Meta:
-                table = "bench_items"
+    t0 = time.monotonic()
+    await raw_execute('DELETE FROM "bench_items" WHERE "category" = \'B\'', None)
+    t_delete = time.monotonic() - t0
 
-        qs = RItem.objects.filter(value__gt=5000)
-        t0 = time.perf_counter()
-        _ = await qs
-        return time.perf_counter() - t0
+    return Row(t_bulk_create, t_filter, t_agg, t_update, t_delete)
 
-    async def ryx_raw():
-        t0 = time.perf_counter()
-        _ = await _core.raw_fetch(
-            'SELECT * FROM "bench_items" WHERE "value" > 5000', None
+
+async def bench_sqlalchemy(url: str) -> Dict[str, Row]:
+    try:
+        from sqlalchemy import (
+            Column,
+            Integer,
+            String,
+            select,
+            func,
+            update,
+            delete,
         )
-        return time.perf_counter() - t0
+        from sqlalchemy.orm import DeclarativeBase, sessionmaker
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    except ImportError:
+        print("SQLAlchemy not installed; skipping.")
+        return {}
 
-    sa_orm_t, sa_core_t, ryx_t, ryx_raw_t = await asyncio.gather(
-        sa_orm(), sa_core(), ryx_orm(), ryx_raw()
-    )
-    return BenchResult("filter_query", ryx_t, sa_orm_t, sa_core_t, ryx_raw_t)
+    async_url = sa_async_url_from_env(url)
+    engine = create_async_engine(async_url, echo=False)
+    async_session = sessionmaker(engine, class_=AsyncSession)
 
+    class Base(DeclarativeBase):
+        pass
 
-async def bench_aggregate(session_maker):
-    async def sa_orm():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            _ = await s.execute(select(func.count()).select_from(Item))
-            return time.perf_counter() - t0
+    class SAItem(Base):
+        __tablename__ = "sa_items"
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        name = Column(String(100), nullable=False)
+        category = Column(String(50), nullable=False)
+        price = Column(Integer, default=0)
+        is_active = Column(Integer, default=1)
 
-    async def sa_core():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            _ = await s.execute(select(func.count()).select_from(Item))
-            return time.perf_counter() - t0
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
 
-    async def ryx_orm():
-        from ryx.models import Model, IntegerField, BooleanField, CharField
-
-        class RItem(Model):
-            name = CharField()
-            active = BooleanField()
-            value = IntegerField()
-
-            class Meta:
-                table = "bench_items"
-
-        t0 = time.perf_counter()
-        _ = await RItem.objects.count()
-        return time.perf_counter() - t0
-
-    async def ryx_raw():
-        t0 = time.perf_counter()
-        _ = await _core.raw_fetch('SELECT COUNT(*) FROM "bench_items"', None)
-        return time.perf_counter() - t0
-
-    sa_orm_t, sa_core_t, ryx_t, ryx_raw_t = await asyncio.gather(
-        sa_orm(), sa_core(), ryx_orm(), ryx_raw()
-    )
-    return BenchResult("aggregate", ryx_t, sa_orm_t, sa_core_t, ryx_raw_t)
-
-
-async def bench_bulk_update(session_maker):
-    async def sa_orm():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            await s.execute(
-                sa.update(Item).where(Item.id <= 10000).values(active=False, value=sa.text("value+1"))
+    def sa_seed_values():
+        return [
+            dict(
+                name=f"Item {i}",
+                category="A" if i % 2 == 0 else "B",
+                price=i * 10,
+                is_active=1 if i % 3 != 0 else 0,
             )
-            await s.commit()
-            return time.perf_counter() - t0
+            for i in range(N)
+        ]
 
-    async def sa_core():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            await s.execute(
-                Item.__table__.update()
-                .where(Item.c.id <= 10000)
-                .values(active=False, value=sa.text("value+1"))
-            )
-            await s.commit()
-            return time.perf_counter() - t0
+    # ORM bulk_create
+    t0 = time.monotonic()
+    async with async_session() as session:
+        session.add_all([SAItem(**v) for v in sa_seed_values()])
+        await session.commit()
+    sa_orm_create = time.monotonic() - t0
 
-    async def ryx_orm():
-        from ryx.models import Model, IntegerField, BooleanField, CharField
-
-        class RItem(Model):
-            name = CharField()
-            active = BooleanField()
-            value = IntegerField()
-
-            class Meta:
-                table = "bench_items"
-
-        from ryx.bulk import bulk_update as ryx_bulk_update
-
-        # fetch instances to update
-        items = await RItem.objects.filter(pk__lte=10000)
-        for it in items:
-            it.active = False
-            it.value = it.value + 1
-        t0 = time.perf_counter()
-        await ryx_bulk_update(RItem, items, fields=["active", "value"], batch_size=1000)
-        return time.perf_counter() - t0
-
-    async def ryx_raw():
-        t0 = time.perf_counter()
-        await _core.raw_execute(
-            'UPDATE "bench_items" SET "active" = FALSE, "value" = "value" + 1 WHERE "id" <= 10000',
-            None,
+    # ORM filter
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = (
+            select(SAItem)
+            .where(SAItem.category == "A", SAItem.is_active == 1)
+            .order_by(SAItem.price.desc())
+            .limit(50)
         )
-        return time.perf_counter() - t0
+        res = await session.execute(stmt)
+        res.scalars().all()
+    sa_orm_filter = time.monotonic() - t0
 
-    sa_orm_t, sa_core_t, ryx_t, ryx_raw_t = await asyncio.gather(
-        sa_orm(), sa_core(), ryx_orm(), ryx_raw()
-    )
-    return BenchResult("bulk_update", ryx_t, sa_orm_t, sa_core_t, ryx_raw_t)
+    # ORM aggregate
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = select(
+            func.count(SAItem.id),
+            func.sum(SAItem.price),
+            func.avg(SAItem.price),
+        ).where(SAItem.category == "A")
+        await session.execute(stmt)
+    sa_orm_agg = time.monotonic() - t0
+
+    # ORM bulk_update
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = (
+            update(SAItem)
+            .where(SAItem.is_active == 1)
+            .values(price=SAItem.price + 100)
+        )
+        await session.execute(stmt)
+        await session.commit()
+    sa_orm_update = time.monotonic() - t0
+
+    # ORM bulk_delete
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = delete(SAItem).where(SAItem.category == "B")
+        await session.execute(stmt)
+        await session.commit()
+    sa_orm_delete = time.monotonic() - t0
+
+    # Core: re-seed
+    async with engine.begin() as conn:
+        await conn.execute(delete(SAItem))
+        await conn.execute(SAItem.__table__.insert(), sa_seed_values())
+
+    # Core filter
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = (
+            select(SAItem)
+            .where(SAItem.category == "A", SAItem.is_active == 1)
+            .order_by(SAItem.price.desc())
+            .limit(50)
+        )
+        res = await session.execute(stmt)
+        res.fetchall()
+    sa_core_filter = time.monotonic() - t0
+
+    # Core aggregate
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = select(
+            func.count(SAItem.id),
+            func.sum(SAItem.price),
+            func.avg(SAItem.price),
+        ).where(SAItem.category == "A")
+        await session.execute(stmt)
+    sa_core_agg = time.monotonic() - t0
+
+    # Core bulk_update
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = (
+            SAItem.__table__.update()
+            .where(SAItem.__table__.c.is_active == 1)
+            .values(price=SAItem.__table__.c.price + 100)
+        )
+        await session.execute(stmt)
+        await session.commit()
+    sa_core_update = time.monotonic() - t0
+
+    # Core bulk_delete
+    t0 = time.monotonic()
+    async with async_session() as session:
+        stmt = SAItem.__table__.delete().where(SAItem.__table__.c.category == "B")
+        await session.execute(stmt)
+        await session.commit()
+    sa_core_delete = time.monotonic() - t0
+
+    await engine.dispose()
+
+    orm_row = Row(sa_orm_create, sa_orm_filter, sa_orm_agg, sa_orm_update, sa_orm_delete)
+    core_row = Row(sa_orm_create, sa_core_filter, sa_core_agg, sa_core_update, sa_core_delete)
+    return {"orm": orm_row, "core": core_row}
 
 
-async def bench_bulk_delete(session_maker):
-    async def sa_orm():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            await s.execute(sa.delete(Item).where(Item.id <= 10000))
-            await s.commit()
-            return time.perf_counter() - t0
-
-    async def sa_core():
-        async with session_maker() as s:
-            t0 = time.perf_counter()
-            await s.execute(Item.__table__.delete().where(Item.c.id <= 10000))
-            await s.commit()
-            return time.perf_counter() - t0
-
-    async def ryx_orm():
-        from ryx.models import Model, IntegerField, BooleanField, CharField
-
-        class RItem(Model):
-            name = CharField()
-            active = BooleanField()
-            value = IntegerField()
-
-            class Meta:
-                table = "bench_items"
-
-        items = await RItem.objects.filter(pk__lte=10000)
-        from ryx.bulk import bulk_delete as ryx_bulk_delete
-
-        t0 = time.perf_counter()
-        await ryx_bulk_delete(RItem, items, batch_size=1000)
-        return time.perf_counter() - t0
-
-    async def ryx_raw():
-        t0 = time.perf_counter()
-        await _core.raw_execute('DELETE FROM "bench_items" WHERE "id" <= 10000', None)
-        return time.perf_counter() - t0
-
-    sa_orm_t, sa_core_t, ryx_t, ryx_raw_t = await asyncio.gather(
-        sa_orm(), sa_core(), ryx_orm(), ryx_raw()
-    )
-    return BenchResult("bulk_delete", ryx_t, sa_orm_t, sa_core_t, ryx_raw_t)
+def print_table(ryx_row: Row, sa_rows: Dict[str, Row], raw_row: Row):
+    print("\n" + "=" * 70)
+    print("BENCHMARK SUMMARY (seconds, lower is better)")
+    print("=" * 70)
+    print(f"{'Operation':<18} | {'Ryx ORM':>10} | {'SA ORM':>10} | {'SA Core':>10} | {'Ryx raw':>10}")
+    print("-" * 70)
+    ops = ["bulk_create", "filter_query", "aggregate", "bulk_update", "bulk_delete"]
+    for op in ops:
+        print(
+            f"{op:<18} | "
+            f"{getattr(ryx_row, op):10.4f} | "
+            f"{getattr(sa_rows['orm'], op):10.4f} | "
+            f"{getattr(sa_rows['core'], op):10.4f} | "
+            f"{getattr(raw_row, op):10.4f}"
+        )
+    print("=" * 70)
 
 
 async def main():
-    url = os.environ.get("RYX_DATABASE_URL", "sqlite:///bench.db")
-    engine = await setup_sa_engine(url)
-    await setup_ryx(url)
+    url = os.environ.get("RYX_DATABASE_URL", DEFAULT_SQLITE)
+    print(f"Using database URL: {url}")
 
-    Session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    # Fresh table for Ryx benchmarks
+    ryx_row = await bench_ryx(url)
 
-    # Seed data for non-create benches
-    async with Session() as s:
-        await s.execute(Item.__table__.insert(), [{"name": f"seed{i}", "active": True, "value": i} for i in range(10_000)])
-        await s.commit()
+    # Seed again for raw benchmarks
+    await raw_execute('DELETE FROM "bench_items"', None)
+    raw_row = await bench_ryx_raw(url)
 
-    benches: List[Callable[[], BenchResult]] = [
-        lambda: bench_bulk_create(Session),
-        lambda: bench_filter(Session),
-        lambda: bench_aggregate(Session),
-        lambda: bench_bulk_update(Session),
-        lambda: bench_bulk_delete(Session),
-    ]
+    sa_rows = await bench_sqlalchemy(url)
+    if not sa_rows:
+        print("SQLAlchemy benches skipped.")
+        return
 
-    results: List[BenchResult] = []
-    for bench in benches:
-        results.append(await bench())
-
-    # Print table
-    print("\n" + "=" * 70)
-    print("BENCHMARK SUMMARY (times in seconds, lower is better)")
-    print("=" * 70)
-    print(f"{'Operation':<20} | {'Ryx ORM':>12} | {'SQLA ORM':>14} | {'SQLA Core':>15} | {'Ryx raw':>12}")
-    print("-" * 70)
-    for r in results:
-        print(
-            f"{r.name:<20} | {r.ryx_orm:12.4f} | {r.sa_orm:14.4f} | {r.sa_core:15.4f} | {r.ryx_raw:12.4f}"
-        )
-    print("=" * 70)
+    print_table(ryx_row, sa_rows, raw_row)
 
 
 if __name__ == "__main__":
