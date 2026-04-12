@@ -973,7 +973,7 @@ mod tests {
                 field: "*".into(),
                 distinct: false,
             })
-            .with_group_by("status".into());
+            .with_group_by("status");
         let q = compile(&node).unwrap();
         assert!(q.sql.contains("GROUP BY"), "{}", q.sql);
     }
@@ -990,7 +990,7 @@ mod tests {
                 field: "*".into(),
                 distinct: false,
             })
-            .with_group_by("author_id".into())
+            .with_group_by("author_id")
             .with_having(FilterNode {
                 field: "cnt".into(),
                 lookup: "gte".into(),
