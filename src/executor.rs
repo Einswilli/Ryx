@@ -405,6 +405,7 @@ pub async fn bulk_insert(
 }
 
 /// Bulk delete by primary key values in one shot.
+#[instrument(skip(table, pk_col, pks))]
 pub async fn bulk_delete(
     table: String,
     pk_col: String,
@@ -424,6 +425,13 @@ pub async fn bulk_delete(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" IN ({})", table, pk_col, ph);
+    debug!(
+        target: "ryx::bulk_delete",
+        db_alias = db_alias.as_deref().unwrap_or("default"),
+        params = pks.len(),
+        sql_len = sql.len(),
+        "bulk_delete compiled"
+    );
     let mut q = sqlx::query(&sql);
     q = bind_values(q, &pks);
     let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
@@ -435,6 +443,7 @@ pub async fn bulk_delete(
 }
 
 /// Bulk update using CASE WHEN, values already mapped to SqlValue.
+#[instrument(skip(table, pk_col, col_names, field_values, pks))]
 pub async fn bulk_update(
     table: String,
     pk_col: String,
@@ -480,6 +489,15 @@ pub async fn bulk_update(
         case_clauses.join(", "),
         pk_col,
         pk_placeholders.join(", ")
+    );
+    debug!(
+        target: "ryx::bulk_update",
+        db_alias = db_alias.as_deref().unwrap_or("default"),
+        rows = n,
+        cols = f,
+        sql_len = sql.len(),
+        params = all_values.len(),
+        "bulk_update compiled"
     );
 
     let mut q = sqlx::query(&sql);
