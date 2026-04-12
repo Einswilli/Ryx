@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ryx_query::ast::{QNode, SqlValue};
-use ryx_query::compiler::compile_q;
+use ryx_query::ast::{QNode, QueryNode, QueryOperation, SqlValue};
+use ryx_query::compiler::{compile, compile_q};
 use ryx_query::lookups::init_registry;
 use ryx_query::Backend;
 
@@ -95,6 +95,45 @@ fn criterion_benchmark(c: &mut Criterion) {
                 &mut values,
                 black_box(Backend::PostgreSQL),
             )
+        })
+    });
+
+    // End-to-end compile (plan hash path)
+    let base_node = QueryNode {
+        operation: QueryOperation::Select { columns: None },
+        table: "posts".into(),
+        backend: Backend::PostgreSQL,
+        db_alias: None,
+        filters: vec![],
+        q_filter: Some(complex_q.clone()),
+        joins: vec![],
+        annotations: vec![],
+        group_by: vec![],
+        having: vec![],
+        order_by: vec![],
+        limit: Some(100),
+        offset: None,
+        distinct: false,
+    };
+
+    c.bench_function("compile_full_select_cache_miss", |b| {
+        b.iter(|| {
+            let mut node = base_node.clone();
+            node.limit = Some(black_box(100));
+            compile(black_box(&node)).unwrap()
+        })
+    });
+
+    // Warm cache once, then benchmark hits
+    let mut warm = base_node.clone();
+    warm.limit = Some(100);
+    let _ = compile(&warm).unwrap();
+
+    c.bench_function("compile_full_select_cache_hit", |b| {
+        b.iter(|| {
+            let mut node = base_node.clone();
+            node.limit = Some(black_box(100));
+            compile(black_box(&node)).unwrap()
         })
     });
 }
