@@ -72,6 +72,8 @@ pub struct MutationResult {
     /// The last inserted row's ID, if the query was an INSERT with
     /// `returning_id = true` and the database supports it.
     pub last_insert_id: Option<i64>,
+    /// All returned IDs (for bulk inserts with RETURNING).
+    pub returned_ids: Option<Vec<i64>>,
 }
 
 // ###
@@ -250,12 +252,24 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
                 return Ok(MutationResult {
                     rows_affected: 1,
                     last_insert_id,
+                    returned_ids: Some(
+                        rows.iter()
+                            .filter_map(|row| {
+                                row.values().next().and_then(|v| match v {
+                                    SqlValue::Int(i) => Some(*i),
+                                    SqlValue::Float(f) => Some(*f as i64),
+                                    _ => None,
+                                })
+                            })
+                            .collect(),
+                    ),
                 });
             }
             let rows_affected = active_tx.execute_query(query).await?;
             return Ok(MutationResult {
                 rows_affected,
                 last_insert_id: None,
+                returned_ids: None,
             });
         }
         return Err(RyxError::Internal("Transaction is no longer active".into()));
@@ -273,10 +287,15 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
 
         let last_insert_id = rows.first().and_then(|row| row.try_get::<i64, _>(0).ok());
+        let returned_ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|row| row.try_get::<i64, _>(0).ok())
+            .collect();
 
         return Ok(MutationResult {
             rows_affected: rows.len() as u64,
             last_insert_id,
+            returned_ids: Some(returned_ids),
         });
     }
 
@@ -288,6 +307,7 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
     Ok(MutationResult {
         rows_affected: result.rows_affected(),
         last_insert_id: None,
+        returned_ids: None,
     })
 }
 
@@ -306,13 +326,14 @@ pub async fn bulk_insert(
     returning_id: bool,
     ignore_conflicts: bool,
     db_alias: Option<String>,
-) -> RyxResult<MutationResult> {
-    if rows.is_empty() {
-        return Ok(MutationResult {
-            rows_affected: 0,
-            last_insert_id: None,
-        });
-    }
+    ) -> RyxResult<MutationResult> {
+        if rows.is_empty() {
+            return Ok(MutationResult {
+                rows_affected: 0,
+                last_insert_id: None,
+                returned_ids: None,
+            });
+        }
     let pool = pool::get(db_alias.as_deref())?;
     let backend = pool::get_backend(db_alias.as_deref())?;
 
@@ -363,16 +384,22 @@ pub async fn bulk_insert(
     q = bind_values(q, &flat);
     if returning_id {
         let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
-        let last_insert_id = rows.first().and_then(|r| r.try_get::<i64, _>(0).ok());
+        let ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r.try_get::<i64, _>(0).ok())
+            .collect();
+        let last_insert_id = ids.first().cloned();
         Ok(MutationResult {
             rows_affected: rows.len() as u64,
             last_insert_id,
+            returned_ids: Some(ids),
         })
     } else {
         let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
         Ok(MutationResult {
             rows_affected: res.rows_affected(),
             last_insert_id: res.last_insert_id(),
+            returned_ids: None,
         })
     }
 }
@@ -388,6 +415,7 @@ pub async fn bulk_delete(
         return Ok(MutationResult {
             rows_affected: 0,
             last_insert_id: None,
+            returned_ids: None,
         });
     }
     let pool = pool::get(db_alias.as_deref())?;
@@ -402,6 +430,7 @@ pub async fn bulk_delete(
     Ok(MutationResult {
         rows_affected: res.rows_affected(),
         last_insert_id: None,
+        returned_ids: None,
     })
 }
 
@@ -421,6 +450,7 @@ pub async fn bulk_update(
         return Ok(MutationResult {
             rows_affected: 0,
             last_insert_id: None,
+            returned_ids: None,
         });
     }
 
@@ -458,6 +488,7 @@ pub async fn bulk_update(
     Ok(MutationResult {
         rows_affected: res.rows_affected(),
         last_insert_id: None,
+        returned_ids: None,
     })
 }
 

@@ -5,6 +5,7 @@ use ryx_query::ast::{
     AggFunc, AggregateExpr, FilterNode, JoinClause, JoinKind, OrderByClause, QueryNode,
     QueryOperation,
 };
+use ryx_query::symbols::Symbol;
 use std::sync::Arc;
 
 use crate::py_dict_to_qnode;
@@ -57,7 +58,7 @@ pub fn build_plan<'py>(
                     let negated: bool = t.get_item(3)?.extract()?;
                     let sql_value = py_to_sql_value(&val)?;
                     node = node.with_filter(FilterNode {
-                        field,
+                        field: field.into(),
                         lookup,
                         value: sql_value,
                         negated,
@@ -87,9 +88,9 @@ pub fn build_plan<'py>(
                         other => AggFunc::Raw(other.to_string()),
                     };
                     node = node.with_annotation(AggregateExpr {
-                        alias,
+                        alias: alias.into(),
                         func: agg_func,
-                        field,
+                        field: field.into(),
                         distinct,
                     });
                 }
@@ -105,9 +106,9 @@ pub fn build_plan<'py>(
             "select_cols" => {
                 let payload = tuple.get_item(1)?;
                 let list = payload.cast::<PyList>()?;
-                let cols: Vec<String> = list
+                let cols: Vec<Symbol> = list
                     .iter()
-                    .map(|i| i.extract().unwrap_or_default())
+                    .map(|i| i.extract::<String>().unwrap_or_default().into())
                     .collect();
                 node.operation = QueryOperation::Select {
                     columns: Some(cols),
@@ -131,11 +132,11 @@ pub fn build_plan<'py>(
                 let alias = if alias_opt.is_empty() {
                     None
                 } else {
-                    Some(alias_opt)
+                    Some(alias_opt.into())
                 };
                 node = node.with_join(JoinClause {
                     kind: join_kind,
-                    table,
+                    table: table.into(),
                     alias,
                     on_left,
                     on_right,

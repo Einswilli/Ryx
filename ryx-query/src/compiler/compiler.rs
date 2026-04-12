@@ -17,7 +17,7 @@ use crate::lookups::date_lookups as date;
 use crate::lookups::json_lookups as json;
 use crate::lookups::{self, LookupContext};
 use smallvec::SmallVec;
-use std::fmt::Write;
+use crate::symbols::{GLOBAL_INTERNER, Symbol};
 
 use super::helpers;
 pub use super::helpers::{apply_like_wrapping, qualified_col, split_qualified, KNOWN_TRANSFORMS};
@@ -51,6 +51,11 @@ impl SqlWriter {
         self.buf.push('"');
     }
 
+    fn write_symbol(&mut self, sym: crate::symbols::Symbol) {
+        let resolved = GLOBAL_INTERNER.resolve(sym);
+        self.write_quote(&resolved);
+    }
+
     fn write_qualified(&mut self, s: &str) {
         if let Some((table, col)) = s.split_once('.') {
             self.write_quote(table);
@@ -61,10 +66,15 @@ impl SqlWriter {
         }
     }
 
+    fn write_qualified_symbol(&mut self, sym: crate::symbols::Symbol) {
+        let resolved = GLOBAL_INTERNER.resolve(sym);
+        self.write_qualified(&resolved);
+    }
+
     fn write_comma_separated<I, F>(&mut self, items: I, mut f: F)
     where
         I: IntoIterator,
-        F: FnMut(&I::Item, &mut Self),
+        F: FnMut(I::Item, &mut Self),
     {
         self.write_separated(items, ", ", f);
     }
@@ -72,14 +82,14 @@ impl SqlWriter {
     fn write_separated<I, F>(&mut self, items: I, sep: &str, mut f: F)
     where
         I: IntoIterator,
-        F: FnMut(&I::Item, &mut Self),
+        F: FnMut(I::Item, &mut Self),
     {
         let mut first = true;
         for item in items {
             if !first {
                 self.buf.push_str(sep);
             }
-            f(&item, self);
+            f(item, self);
             first = false;
         }
     }
@@ -119,13 +129,13 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
         sql: writer.finish(),
         values,
         db_alias: node.db_alias.clone(),
-        base_table: Some(node.table.clone()),
+        base_table: Some(GLOBAL_INTERNER.resolve(node.table)),
     })
 }
 
 fn compile_select(
     node: &QueryNode,
-    columns: Option<&[String]>,
+    columns: Option<&[Symbol]>,
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
@@ -140,14 +150,14 @@ fn compile_select(
             if node.group_by.is_empty() {
                 compile_agg_cols(&node.annotations, writer);
             } else {
-                writer.write_comma_separated(&node.group_by, |c, w| w.write_quote(c));
+                writer.write_comma_separated(&node.group_by, |c, w| w.write_symbol(*c));
                 writer.write(", ");
                 compile_agg_cols(&node.annotations, writer);
             }
         }
     } else {
         let cols = columns.unwrap();
-        writer.write_comma_separated(cols, |c, w| w.write_qualified(c));
+        writer.write_comma_separated(cols, |c, w| w.write_qualified_symbol(*c));
         if !node.annotations.is_empty() {
             writer.write(", ");
             compile_agg_cols(&node.annotations, writer);
@@ -155,7 +165,7 @@ fn compile_select(
     }
 
     writer.write(" FROM ");
-    writer.write_quote(&node.table);
+    writer.write_symbol(node.table);
 
     if !node.joins.is_empty() {
         writer.write(" ");
@@ -172,7 +182,7 @@ fn compile_select(
 
     if !node.group_by.is_empty() {
         writer.write(" GROUP BY ");
-        writer.write_comma_separated(&node.group_by, |c, w| w.write_quote(c));
+        writer.write_comma_separated(&node.group_by, |c, w| w.write_symbol(*c));
     }
 
     if !node.having.is_empty() {
@@ -210,7 +220,8 @@ fn compile_aggregate(
     writer.write("SELECT ");
     compile_agg_cols(&node.annotations, writer);
     writer.write(" FROM ");
-    writer.write_quote(&node.table);
+    let table_resolved = GLOBAL_INTERNER.resolve(node.table);
+    writer.write_quote(&table_resolved);
 
     if !node.joins.is_empty() {
         writer.write(" ");
@@ -234,7 +245,8 @@ fn compile_count(
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
     writer.write("SELECT COUNT(*) FROM ");
-    writer.write_quote(&node.table);
+    let table_resolved = GLOBAL_INTERNER.resolve(node.table);
+    writer.write_quote(&table_resolved);
     if !node.joins.is_empty() {
         writer.write(" ");
         compile_joins(&node.joins, writer);
@@ -255,7 +267,8 @@ fn compile_delete(
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
     writer.write("DELETE FROM ");
-    writer.write_quote(&node.table);
+    let table_resolved = GLOBAL_INTERNER.resolve(node.table);
+    writer.write_quote(&table_resolved);
     compile_where_combined(
         &node.filters,
         node.q_filter.as_ref(),
@@ -268,7 +281,7 @@ fn compile_delete(
 
 fn compile_update(
     node: &QueryNode,
-    assignments: &[(String, SqlValue)],
+    assignments: &[(Symbol, SqlValue)],
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
@@ -276,12 +289,13 @@ fn compile_update(
         return Err(QueryError::Internal("UPDATE with no assignments".into()));
     }
     writer.write("UPDATE ");
-    writer.write_quote(&node.table);
+    let table_resolved = GLOBAL_INTERNER.resolve(node.table);
+    writer.write_quote(&table_resolved);
     writer.write(" SET ");
 
     writer.write_comma_separated(assignments, |(col, val), w| {
         values.push(val.clone());
-        w.write_quote(col);
+        w.write_symbol(*col);
         w.write(" = ?");
     });
 
@@ -297,7 +311,7 @@ fn compile_update(
 
 fn compile_insert(
     node: &QueryNode,
-    cols_vals: &[(String, SqlValue)],
+    cols_vals: &[(Symbol, SqlValue)],
     returning_id: bool,
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
@@ -309,9 +323,10 @@ fn compile_insert(
     values.extend(vals);
 
     writer.write("INSERT INTO ");
-    writer.write_quote(&node.table);
+    let table_resolved = GLOBAL_INTERNER.resolve(node.table);
+    writer.write_quote(&table_resolved);
     writer.write(" (");
-    writer.write_comma_separated(&cols, |c, w| w.write_quote(c));
+    writer.write_comma_separated(&cols, |c, w| w.write_symbol(*c));
     writer.write(") VALUES (");
     for i in 0..cols.len() {
         writer.write("?");
@@ -340,10 +355,10 @@ pub fn compile_joins(joins: &[JoinClause], writer: &mut SqlWriter) {
         };
         writer.write(kind);
         writer.write(" ");
-        writer.write_quote(&j.table);
+        writer.write_symbol(j.table);
         if let Some(alias) = &j.alias {
             writer.write(" AS ");
-            writer.write_quote(alias);
+            writer.write_symbol(*alias);
         }
 
         if j.kind != JoinKind::CrossJoin {
@@ -371,10 +386,11 @@ pub fn compile_joins(joins: &[JoinClause], writer: &mut SqlWriter) {
 
 pub fn compile_agg_cols(anns: &[AggregateExpr], writer: &mut SqlWriter) {
     writer.write_comma_separated(anns, |a, w| {
-        let col = if a.field == "*" {
+        let field_resolved = GLOBAL_INTERNER.resolve(a.field);
+        let col = if field_resolved == "*" {
             "*".to_string()
         } else {
-            helpers::qualified_col(&a.field)
+            helpers::qualified_col(&field_resolved)
         };
         let distinct = if a.distinct && a.func != AggFunc::Count {
             "DISTINCT "
@@ -387,7 +403,7 @@ pub fn compile_agg_cols(anns: &[AggregateExpr], writer: &mut SqlWriter) {
             AggFunc::Raw(expr) => {
                 w.write(expr);
                 w.write(" AS ");
-                w.write_quote(&a.alias);
+                w.write_symbol(a.alias);
             }
             f => {
                 w.write(f.sql_name());
@@ -399,7 +415,7 @@ pub fn compile_agg_cols(anns: &[AggregateExpr], writer: &mut SqlWriter) {
                     w.write_qualified(&col);
                 }
                 w.write(") AS ");
-                w.write_quote(&a.alias);
+                w.write_symbol(a.alias);
             }
         }
     });
@@ -407,7 +423,7 @@ pub fn compile_agg_cols(anns: &[AggregateExpr], writer: &mut SqlWriter) {
 
 pub fn compile_order_by(clauses: &[crate::ast::OrderByClause], writer: &mut SqlWriter) {
     writer.write_comma_separated(clauses, |c, w| {
-        w.write_qualified(&c.field);
+        w.write_qualified_symbol(c.field);
         w.write(" ");
         let dir = match c.direction {
             SortDirection::Asc => "ASC",
@@ -458,7 +474,7 @@ pub fn compile_q(
             lookup,
             value,
             negated,
-        } => compile_single_filter(field, lookup, value, *negated, values, backend, writer),
+        } => compile_single_filter(*field, lookup, value, *negated, values, backend, writer),
         QNode::And(children) => {
             writer.write("(");
             writer.write_separated(children, " AND ", |c, w| {
@@ -497,14 +513,14 @@ fn compile_filters(
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
     writer.write_separated(filters, " AND ", |f, w| {
-        compile_single_filter(&f.field, &f.lookup, &f.value, f.negated, values, backend, w)
+        compile_single_filter(f.field, &f.lookup, &f.value, f.negated, values, backend, w)
             .unwrap();
     });
     Ok(())
 }
 
 fn compile_single_filter(
-    field: &str,
+    field: Symbol,
     lookup: &str,
     value: &SqlValue,
     negated: bool,
@@ -512,8 +528,9 @@ fn compile_single_filter(
     backend: Backend,
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
-    let (base_column, applied_transforms, json_key) = if field.contains("__") {
-        let parts: Vec<&str> = field.split("__").collect();
+    let field_resolved = GLOBAL_INTERNER.resolve(field);
+    let (base_column, applied_transforms, json_key) = if field_resolved.contains("__") {
+        let parts: Vec<&str> = field_resolved.split("__").collect();
 
         let mut transforms = Vec::new();
         let mut key_part: Option<&str> = None;
@@ -535,7 +552,7 @@ fn compile_single_filter(
             (field.to_string(), vec![], None)
         }
     } else {
-        (field.to_string(), vec![], None)
+        (field_resolved.to_string(), vec![], None)
     };
 
     let final_column = if lookup.contains("__") {
@@ -705,7 +722,7 @@ fn compile_single_filter(
             "json" => json::json_cast_transform as crate::lookups::LookupFn,
             _ => {
                 return Err(QueryError::UnknownLookup {
-                    field: field.to_string(),
+                    field: field_resolved.clone(),
                     lookup: lookup.to_string(),
                 })
             }
