@@ -2,24 +2,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::prelude::IntoPyObject;
-use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::{IntoPyObjectExt, prelude::*};
 use tokio::sync::Mutex as TokioMutex;
 
 pub mod errors;
 pub mod executor;
+pub mod model_registry;
+pub mod plan;
 pub mod pool;
 pub mod transaction;
 
 use crate::errors::RyxError;
 use crate::pool::PoolConfig;
+use crate::transaction::TransactionHandle;
 use ryx_query::ast::{
     AggFunc, AggregateExpr, FilterNode, JoinClause, JoinKind, OrderByClause, QNode, QueryNode,
     QueryOperation, SqlValue,
 };
 use ryx_query::compiler;
 use ryx_query::lookups;
-use crate::transaction::TransactionHandle;
 
 // ###
 // Setup / pool functions
@@ -45,13 +47,13 @@ fn setup<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let urls_py = urls.cast::<PyDict>()?;
     let mut database_urls = HashMap::new();
-    
+
     for (key, value) in urls_py.iter() {
         let alias = key.cast::<PyString>()?.to_str()?.to_string();
         let url = value.cast::<PyString>()?.to_str()?.to_string();
         database_urls.insert(alias, url);
     }
- 
+
     let config = PoolConfig {
         max_connections,
         min_connections,
@@ -60,19 +62,25 @@ fn setup<'py>(
         max_lifetime_secs: max_lifetime,
     };
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        pool::initialize(database_urls, config).await.map_err(PyErr::from)?;
+        pool::initialize(database_urls, config)
+            .await
+            .map_err(PyErr::from)?;
         Python::attach(|py| Ok(py.None().into_pyobject(py)?.unbind()))
     })
 }
 
 #[pyfunction]
 fn register_lookup(name: String, sql_template: String) -> PyResult<()> {
-    lookups::register_custom(name, sql_template).map_err(RyxError::from).map_err(PyErr::from)
+    lookups::register_custom(name, sql_template)
+        .map_err(RyxError::from)
+        .map_err(PyErr::from)
 }
 
 #[pyfunction]
 fn available_lookups() -> PyResult<Vec<String>> {
-    lookups::registered_lookups().map_err(RyxError::from).map_err(PyErr::from)
+    lookups::registered_lookups()
+        .map_err(RyxError::from)
+        .map_err(PyErr::from)
 }
 
 #[pyfunction]
@@ -85,7 +93,6 @@ fn list_transforms() -> Vec<&'static str> {
     lookups::all_transforms().to_vec()
 }
 
-
 #[pyfunction]
 fn list_aliases<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     let aliases = pool::list_aliases().map_err(PyErr::from)?;
@@ -94,8 +101,7 @@ fn list_aliases<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
 
 #[pyfunction]
 fn get_backend(alias: Option<String>) -> PyResult<String> {
-    let backend = pool::get_backend(alias.as_deref())
-        .map_err(PyErr::from)?;
+    let backend = pool::get_backend(alias.as_deref()).map_err(PyErr::from)?;
     Ok(format!("{:?}", backend))
 }
 
@@ -129,7 +135,7 @@ fn raw_fetch<'py>(
         })
     })
 }
- 
+
 #[pyfunction]
 #[pyo3(signature = (sql, alias=None))]
 fn raw_execute<'py>(
@@ -138,12 +144,12 @@ fn raw_execute<'py>(
     alias: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        executor::execute_raw(sql, alias).await.map_err(PyErr::from)?;
+        executor::execute_raw(sql, alias)
+            .await
+            .map_err(PyErr::from)?;
         Python::attach(|py| Ok(py.None().into_pyobject(py)?.unbind()))
     })
 }
-
-
 
 // ###
 // QueryBuilder
@@ -152,7 +158,7 @@ fn raw_execute<'py>(
 #[pyclass(from_py_object, name = "QueryBuilder")]
 #[derive(Clone)]
 pub struct PyQueryBuilder {
-    node: Arc<QueryNode>,
+    pub(crate) node: Arc<QueryNode>,
 }
 
 #[pymethods]
@@ -161,12 +167,12 @@ impl PyQueryBuilder {
     fn new(table: String) -> PyResult<Self> {
         // Get the backend from the pool at QueryBuilder creation time
         let backend = pool::get_backend(None).unwrap_or(ryx_query::Backend::PostgreSQL);
-        
+
         Ok(Self {
             node: Arc::new(QueryNode::select(table).with_backend(backend)),
         })
     }
- 
+
     fn set_using(&self, alias: String) -> PyResult<PyQueryBuilder> {
         Ok(PyQueryBuilder {
             node: Arc::new(self.node.as_ref().clone().with_db_alias(alias)),
@@ -207,7 +213,9 @@ impl PyQueryBuilder {
                 negated,
             });
         }
-        Ok(PyQueryBuilder { node: Arc::new(node) })
+        Ok(PyQueryBuilder {
+            node: Arc::new(node),
+        })
     }
 
     fn add_q_node(&self, node: &Bound<'_, PyAny>) -> PyResult<PyQueryBuilder> {
@@ -292,7 +300,9 @@ impl PyQueryBuilder {
         for f in fields {
             node = node.with_order_by(OrderByClause::parse(&f));
         }
-        PyQueryBuilder { node: Arc::new(node) }
+        PyQueryBuilder {
+            node: Arc::new(node),
+        }
     }
 
     fn set_limit(&self, n: u64) -> PyQueryBuilder {
@@ -310,7 +320,9 @@ impl PyQueryBuilder {
     fn set_distinct(&self) -> PyQueryBuilder {
         let mut node = self.node.as_ref().clone();
         node.distinct = true;
-        PyQueryBuilder { node: Arc::new(node) }
+        PyQueryBuilder {
+            node: Arc::new(node),
+        }
     }
 
     // # Execution methods
@@ -318,7 +330,9 @@ impl PyQueryBuilder {
     fn fetch_all<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let node = self.node.as_ref().clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rows = executor::fetch_all_compiled(node).await.map_err(PyErr::from)?;
+            let rows = executor::fetch_all_compiled(node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| Ok(decoded_rows_to_py(py, rows)?.unbind()))
         })
     }
@@ -326,7 +340,9 @@ impl PyQueryBuilder {
     fn fetch_first<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let node = self.node.as_ref().clone().with_limit(1);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rows = executor::fetch_all_compiled(node).await.map_err(PyErr::from)?;
+            let rows = executor::fetch_all_compiled(node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| match rows.into_iter().next() {
                 Some(row) => Ok(decoded_row_to_py(py, row)?.into_any().unbind()),
                 None => Ok(py.None().into_pyobject(py)?.unbind()),
@@ -337,7 +353,9 @@ impl PyQueryBuilder {
     fn fetch_get<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let node = self.node.as_ref().clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let row = executor::fetch_one_compiled(node).await.map_err(PyErr::from)?;
+            let row = executor::fetch_one_compiled(node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| Ok(decoded_row_to_py(py, row)?.into_any().unbind()))
         })
     }
@@ -346,7 +364,9 @@ impl PyQueryBuilder {
         let mut count_node = self.node.as_ref().clone();
         count_node.operation = QueryOperation::Count;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let count = executor::fetch_count_compiled(count_node).await.map_err(PyErr::from)?;
+            let count = executor::fetch_count_compiled(count_node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| Ok(count.into_pyobject(py)?.unbind()))
         })
     }
@@ -355,7 +375,9 @@ impl PyQueryBuilder {
         let mut agg_node = self.node.as_ref().clone();
         agg_node.operation = QueryOperation::Aggregate;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rows = executor::fetch_all_compiled(agg_node).await.map_err(PyErr::from)?;
+            let rows = executor::fetch_all_compiled(agg_node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| match rows.into_iter().next() {
                 Some(row) => Ok(decoded_row_to_py(py, row)?.into_any().unbind()),
                 None => Ok(PyDict::new(py).into_any().unbind()),
@@ -367,7 +389,9 @@ impl PyQueryBuilder {
         let mut del_node = self.node.as_ref().clone();
         del_node.operation = QueryOperation::Delete;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let res = executor::execute_compiled(del_node).await.map_err(PyErr::from)?;
+            let res = executor::execute_compiled(del_node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| Ok(res.rows_affected.into_pyobject(py)?.unbind()))
         })
     }
@@ -388,7 +412,9 @@ impl PyQueryBuilder {
         };
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let res = executor::execute_compiled(upd_node).await.map_err(PyErr::from)?;
+            let res = executor::execute_compiled(upd_node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| Ok(res.rows_affected.into_pyobject(py)?.unbind()))
         })
     }
@@ -411,7 +437,9 @@ impl PyQueryBuilder {
         };
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let res = executor::execute_compiled(ins_node).await.map_err(PyErr::from)?;
+            let res = executor::execute_compiled(ins_node)
+                .await
+                .map_err(PyErr::from)?;
             Python::attach(|py| match res.last_insert_id {
                 Some(id) => Ok(id.into_pyobject(py)?.unbind()),
                 None => Ok(res.rows_affected.into_pyobject(py)?.unbind()),
@@ -428,7 +456,7 @@ impl PyQueryBuilder {
 // Type conversion: Python → Rust
 // ###
 
-fn py_to_sql_value(obj: &Bound<'_, PyAny>) -> PyResult<SqlValue> {
+pub(crate) fn py_to_sql_value(obj: &Bound<'_, PyAny>) -> PyResult<SqlValue> {
     if obj.is_none() {
         return Ok(SqlValue::Null);
     }
@@ -475,7 +503,7 @@ fn py_int_list_to_sql_values(list: &Bound<'_, PyList>) -> PyResult<Vec<SqlValue>
         .collect()
 }
 
-fn py_dict_to_qnode(obj: &Bound<'_, PyAny>) -> PyResult<QNode> {
+pub(crate) fn py_dict_to_qnode(obj: &Bound<'_, PyAny>) -> PyResult<QNode> {
     let dict = obj
         .cast::<PyDict>()
         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Q node must be a dict"))?;
@@ -673,7 +701,9 @@ fn begin_transaction<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let alias_str = alias.map(|s| s.to_string());
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let handle = TransactionHandle::begin(alias_str).await.map_err(PyErr::from)?;
+        let handle = TransactionHandle::begin(alias_str)
+            .await
+            .map_err(PyErr::from)?;
         Python::attach(|py| {
             let py_handle = PyTransactionHandle {
                 handle: Arc::new(TokioMutex::new(Some(handle))),
@@ -717,19 +747,19 @@ fn execute_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
- 
+
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
             values: sql_values.into(),
             db_alias: None,
+            base_table: None,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(result.rows_affected.into_pyobject(py)?.unbind()))
     })
 }
 
- 
 #[pyfunction]
 fn fetch_with_params<'py>(
     py: Python<'py>,
@@ -740,19 +770,18 @@ fn fetch_with_params<'py>(
         .iter()
         .map(py_to_sql_value)
         .collect::<PyResult<_>>()?;
- 
+
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let compiled = compiler::CompiledQuery {
             sql,
             values: sql_values.into(),
             db_alias: None,
+            base_table: None,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(decoded_rows_to_py(py, rows)?.unbind()))
     })
 }
-
-
 
 /// Bulk delete by primary key list in a single FFI call.
 ///
@@ -915,7 +944,7 @@ fn ryx_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(available_lookups, m)?)?;
     m.add_function(wrap_pyfunction!(list_lookups, m)?)?;
     m.add_function(wrap_pyfunction!(list_transforms, m)?)?;
-    m.add_function(wrap_pyfunction!(list_aliases,m)?)?;
+    m.add_function(wrap_pyfunction!(list_aliases, m)?)?;
     m.add_function(wrap_pyfunction!(get_backend, m)?)?;
     m.add_function(wrap_pyfunction!(is_connected, m)?)?;
     m.add_function(wrap_pyfunction!(pool_stats, m)?)?;
@@ -926,6 +955,13 @@ fn ryx_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bulk_insert, m)?)?;
     m.add_function(wrap_pyfunction!(bulk_delete, m)?)?;
     m.add_function(wrap_pyfunction!(bulk_update, m)?)?;
+    m.add_function(wrap_pyfunction!(plan::build_plan, m)?)?;
+    // Rust-side model registry
+    m.add_class::<model_registry::PyFieldSpec>()?;
+    m.add_class::<model_registry::PyModelOptions>()?;
+    m.add_class::<model_registry::PyModelSpec>()?;
+    m.add_function(wrap_pyfunction!(model_registry::register_model_spec, m)?)?;
+    m.add_function(wrap_pyfunction!(model_registry::get_model_spec, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

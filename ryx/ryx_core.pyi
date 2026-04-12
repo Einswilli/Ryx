@@ -291,6 +291,10 @@ def _set_active_transaction(tx: 'TransactionHandle' | None) -> None:
     ...
 
 
+def build_plan(table: str, ops: list[tuple]):
+    """Build query plan"""
+    ...
+
 # ---------------------------------------------------------------------------
 # QueryBuilder
 # ---------------------------------------------------------------------------

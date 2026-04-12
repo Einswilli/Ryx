@@ -260,7 +260,9 @@ class CachedQueryMixin:
             return await super()._execute()  # type: ignore[misc]
 
         # Determine the cache key
-        sql = self._builder.compiled_sql()          # type: ignore[attr-defined]
+        alias = self._resolve_db_alias("read")      # type: ignore[attr-defined]
+        builder = self._materialize_builder(alias)  # type: ignore[attr-defined]
+        sql = builder.compiled_sql()
         model_name = self._model.__name__           # type: ignore[attr-defined]
         key = self._cache_key or make_cache_key(model_name, sql, [])
 

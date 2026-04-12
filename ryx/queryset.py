@@ -26,6 +26,7 @@ from ryx.signals import (
     pre_bulk_delete,
     pre_update,
 )
+from ryx import ryx_core as _core
 
 if TYPE_CHECKING:
     from ryx.models import Model
@@ -251,8 +252,8 @@ class QuerySet:
     def __init__(
         self,
         model: Model,
-        builder: Optional[_core.QueryBuilder] = None,
         *,
+        _ops: Optional[List[tuple]] = None,
         _select_columns: Optional[List[str]] = None,
         _annotations: Optional[List[dict]] = None,
         _group_by: Optional[List[str]] = None,
@@ -260,23 +261,36 @@ class QuerySet:
     ) -> None:
 
         self._model = model
-        self._builder: _core.QueryBuilder = builder or _core.QueryBuilder(
-            model._meta.table_name
-        )
+        self._ops: List[tuple] = list(_ops) if _ops else []
         self._select_columns = _select_columns
         self._annotations = _annotations or []
         self._group_by = _group_by or []
         self._using = _using
 
-    def _clone(self, builder=None, **overrides) -> "QuerySet":
+    def _clone(self, **overrides) -> "QuerySet":
         return QuerySet(
             self._model,
-            builder or self._builder,
+            _ops=overrides.get("_ops", list(self._ops)),
             _select_columns=overrides.get("_select_columns", self._select_columns),
             _annotations=overrides.get("_annotations", list(self._annotations)),
             _group_by=overrides.get("_group_by", list(self._group_by)),
             _using=overrides.get("_using", self._using),
         )
+
+    def _with_op(self, tag: str, payload) -> "QuerySet":
+        new_ops = list(self._ops)
+        new_ops.append((tag, payload))
+        return self._clone(_ops=new_ops)
+
+    def _materialize_builder(self, alias: Optional[str]):
+        ops = list(self._ops)
+        if alias:
+            ops.append(("using", alias))
+        if self._select_columns:
+            ops.append(("select_cols", list(self._select_columns)))
+        if self._group_by:
+            ops.append(("group_by", list(self._group_by)))
+        return _core.build_plan(self._model._meta.table_name, ops)
 
     def _validate_filters(self, kwargs: Dict[str, Any]) -> None:
         """Verify that lookups and transforms are supported by the field types."""
@@ -313,14 +327,13 @@ class QuerySet:
             Post.objects.filter(Q(active=True), views__gte=100)
         """
         self._validate_filters(kwargs)
-        builder = self._builder
+        ops = list(self._ops)
 
         # Q objects
         for q in q_args:
-            node = q.to_q_node()
-            builder = _apply_q_node(builder, node)
+            ops.append(("q_node", q.to_q_node()))
 
-        # kwargs (flat filters) batched to reduce FFI crossings
+        # kwargs (flat filters) batched
         if kwargs:
             batch = []
             for key, val in kwargs.items():
@@ -328,24 +341,25 @@ class QuerySet:
                     key = self._model._meta.pk_field.attname
                 field, lookup = _parse_lookup_key(key)
                 batch.append((field, lookup, val, False))
-            builder = builder.add_filters_batch(batch)
-        return self._clone(builder)
+            ops.append(("filters", batch))
+
+        return self._clone(_ops=ops)
 
     def exclude(self, *q_args: Q, **kwargs: Any) -> "QuerySet":
         """Add NOT conditions."""
         self._validate_filters(kwargs)
-        builder = self._builder
+        ops = list(self._ops)
         for q in q_args:
-            builder = _apply_q_node(builder, (~q).to_q_node())
+            ops.append(("q_node", (~q).to_q_node()))
 
         if kwargs:
             batch = []
             for key, val in kwargs.items():
                 field, lookup = _parse_lookup_key(key)
                 batch.append((field, lookup, val, True))
-            builder = builder.add_filters_batch(batch)
+            ops.append(("filters", batch))
 
-        return self._clone(builder)
+        return self._clone(_ops=ops)
 
     def all(self) -> "QuerySet":
         return self._clone()
@@ -361,18 +375,24 @@ class QuerySet:
         """
 
         new_anns = list(self._annotations)
-        builder = self._builder
         for alias, agg in aggs.items():
             agg_dict = agg.as_dict(alias)
             new_anns.append(agg_dict)
-            builder = builder.add_annotation(
-                agg_dict["alias"],
-                agg_dict["func"],
-                agg_dict["field"],
-                agg_dict["distinct"],
-            )
-
-        return self._clone(builder, _annotations=new_anns)
+        ops = list(self._ops)
+        if aggs:
+            batch = []
+            for alias, agg in aggs.items():
+                agg_dict = agg.as_dict(alias)
+                batch.append(
+                    (
+                        agg_dict["alias"],
+                        agg_dict["func"],
+                        agg_dict["field"],
+                        agg_dict["distinct"],
+                    )
+                )
+            ops.append(("annotations", batch))
+        return self._clone(_ops=ops, _annotations=new_anns)
 
     async def aggregate(self, **aggs: _Agg) -> Dict[str, Any]:
         """Execute an aggregate-only query and return a single result dict.
@@ -387,12 +407,9 @@ class QuerySet:
             # → {"total_views": 12345, "avg_views": 42.1, "post_count": 293}
         """
 
-        builder = self._builder
-        for alias, agg in aggs.items():
-            d = agg.as_dict(alias)
-            builder = builder.add_annotation(
-                d["alias"], d["func"], d["field"], d["distinct"]
-            )
+        qs = self.annotate(**aggs)
+        alias = qs._resolve_db_alias("read")
+        builder = qs._materialize_builder(alias)
         raw = await builder.fetch_aggregate()
 
         return raw if raw else {}
@@ -410,11 +427,11 @@ class QuerySet:
             # → [{"author_id": 1, "post_count": 5}, ...]
         """
 
-        builder = self._builder
-        for f in fields:
-            builder = builder.add_group_by(f)
+        ops = list(self._ops)
+        if fields:
+            ops.append(("group_by", list(fields)))
         return self._clone(
-            builder, _select_columns=list(fields), _group_by=list(fields)
+            _ops=ops, _select_columns=list(fields), _group_by=list(fields)
         )
 
     # JOINs
@@ -445,10 +462,16 @@ class QuerySet:
         """
 
         left, right = on.split("=", 1)
-        builder = self._builder.add_join(
-            kind.upper(), table, alias or "", left.strip(), right.strip()
+        return self._with_op(
+            "join",
+            (
+                kind.upper(),
+                table,
+                alias or "",
+                left.strip(),
+                right.strip(),
+            ),
         )
-        return self._clone(builder)
 
     def select_related(self, *fields: str) -> "QuerySet":
         """Stub for eager loading of related objects (planned feature).
@@ -462,19 +485,18 @@ class QuerySet:
     def order_by(self, *fields: str) -> "QuerySet":
         """Override ordering. Pass ``"-field"`` for DESC, ``"field"`` for ASC."""
 
-        builder = self._builder
         if fields:
-            builder = builder.add_order_by_batch(list(fields))
-        return self._clone(builder)
+            return self._with_op("order_by", list(fields))
+        return self._clone()
 
     def limit(self, n: int) -> "QuerySet":
-        return self._clone(self._builder.set_limit(n))
+        return self._with_op("limit", int(n))
 
     def offset(self, n: int) -> "QuerySet":
-        return self._clone(self._builder.set_offset(n))
+        return self._with_op("offset", int(n))
 
     def distinct(self) -> "QuerySet":
-        return self._clone(self._builder.set_distinct())
+        return self._with_op("distinct", True)
 
     def __getitem__(self, key):
         """Support slicing for pagination: qs[:3], qs[2:5], qs[3:7].
@@ -498,7 +520,7 @@ class QuerySet:
             # Single index: return the instance at that position
             if key < 0:
                 raise TypeError("Negative indexing is not supported on QuerySet")
-            qs = self._clone(self._builder.set_limit(1).set_offset(key))
+            qs = self.limit(1).offset(key)
             # Return a special awaitable that extracts single item
             return _IndexAwaitable(qs)
         elif isinstance(key, slice):
@@ -512,10 +534,10 @@ class QuerySet:
                 limit = stop - start
             else:
                 limit = None
-            builder = self._builder.set_offset(start)
+            qs = self.offset(start)
             if limit is not None:
-                builder = builder.set_limit(limit)
-            return self._clone(builder)
+                qs = qs.limit(limit)
+            return qs
         else:
             raise TypeError(
                 f"QuerySet indices must be integers or slices, not {type(key).__name__}"
@@ -605,10 +627,11 @@ class QuerySet:
         CachedQS = type("CachedQuerySet", (CachedQueryMixin, QuerySet), {})
         clone = CachedQS(
             self._model,
-            self._builder,
             _select_columns=self._select_columns,
             _annotations=list(self._annotations),
             _group_by=list(self._group_by),
+            _ops=list(self._ops),
+            _using=self._using,
         )
         clone._cache_ttl = ttl
         clone._cache_key = key
@@ -651,9 +674,7 @@ class QuerySet:
     async def _execute(self) -> list:
         alias = self._resolve_db_alias("read")
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
         raw_rows = await builder.fetch_all()
         return [self._model._from_row(row) for row in raw_rows]
@@ -661,18 +682,14 @@ class QuerySet:
     async def count(self) -> int:
         alias = self._resolve_db_alias("read")
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
         return await builder.fetch_count()
 
     async def first(self) -> Optional["Model"]:
         alias = self._resolve_db_alias("read")
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
         raw = await builder.set_limit(1).fetch_first()
         return None if raw is None else self._model._from_row(raw)
@@ -683,9 +700,7 @@ class QuerySet:
 
         alias = qs._resolve_db_alias("read")
 
-        builder = qs._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = qs._materialize_builder(alias)
 
         try:
             raw = await builder.fetch_get()
@@ -705,20 +720,16 @@ class QuerySet:
     async def exists(self) -> bool:
         alias = self._resolve_db_alias("read")
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
-        return await builder.count() > 0
+        return await builder.fetch_count() > 0
 
     async def delete(self) -> int:
         """Bulk delete. Fires pre_bulk_delete / post_bulk_delete signals."""
 
         alias = self._resolve_db_alias("write")
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
         await pre_bulk_delete.send(sender=self._model, queryset=self)
         n = await builder.execute_delete()
@@ -731,9 +742,7 @@ class QuerySet:
         # Resolve database alias: .using() -> Meta.database -> default
         alias = self._using or self._model._meta.database
 
-        builder = self._builder
-        if alias:
-            builder = builder.set_using(alias)
+        builder = self._materialize_builder(alias)
 
         await pre_update.send(sender=self._model, queryset=self, fields=kwargs)
         n = await builder.execute_update(list(kwargs.items()))
@@ -764,7 +773,9 @@ class QuerySet:
     # Introspection
     @property
     def query(self) -> str:
-        return self._builder.compiled_sql()
+        alias = self._resolve_db_alias("read")
+        builder = self._materialize_builder(alias)
+        return builder.compiled_sql()
 
     def __repr__(self) -> str:
         return f"<QuerySet model={self._model.__name__} sql={self.query!r}>"

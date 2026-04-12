@@ -43,9 +43,13 @@ use sqlx::{Column, Row, any::AnyRow};
 use tracing::{debug, instrument};
 
 use crate::errors::{RyxError, RyxResult};
+use crate::model_registry;
 use crate::pool;
-use ryx_query::{ast::{SqlValue, QueryNode}, compiler::CompiledQuery};
 use crate::transaction;
+use ryx_query::{
+    ast::{QueryNode, SqlValue},
+    compiler::CompiledQuery,
+};
 use smallvec::SmallVec;
 
 // ###
@@ -58,6 +62,7 @@ use smallvec::SmallVec;
 /// and booleans without a custom enum. JSON values convert cleanly to Python
 /// objects in the PyO3 layer.
 pub type DecodedRow = HashMap<String, ryx_query::ast::SqlValue>;
+
 
 /// Result of a non-SELECT query (INSERT/UPDATE/DELETE).
 #[derive(Debug)]
@@ -89,15 +94,15 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
     }
 
     let pool = pool::get(query.db_alias.as_deref())?;
- 
+
     debug!(sql = %query.sql, "Executing SELECT");
- 
+
     let mut q = sqlx::query(&query.sql);
     q = bind_values(q, &query.values);
- 
+
     let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
 
-    let decoded = decode_rows(&rows);
+    let decoded = decode_rows(&rows, query.base_table.as_deref());
     Ok(decoded)
 }
 
@@ -105,8 +110,11 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
 #[instrument(skip(sql))]
 pub async fn fetch_raw(sql: String, db_alias: Option<String>) -> RyxResult<Vec<DecodedRow>> {
     let pool = pool::get(db_alias.as_deref())?;
-    let rows = sqlx::query(&sql).fetch_all(&*pool).await.map_err(RyxError::Database)?;
-    Ok(decode_rows(&rows))
+    let rows = sqlx::query(&sql)
+        .fetch_all(&*pool)
+        .await
+        .map_err(RyxError::Database)?;
+    Ok(decode_rows(&rows, None))
 }
 
 /// Compile a QueryNode then fetch all (single FFI hop helper).
@@ -115,7 +123,7 @@ pub async fn fetch_all_compiled(node: QueryNode) -> RyxResult<Vec<DecodedRow>> {
     let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
     fetch_all(compiled).await
 }
- 
+
 /// Execute a SELECT COUNT(*) query and return the count.
 
 ///
@@ -143,21 +151,21 @@ pub async fn fetch_count(query: CompiledQuery) -> RyxResult<i64> {
         }
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
- 
+
     let pool = pool::get(query.db_alias.as_deref())?;
- 
+
     debug!(sql = %query.sql, "Executing COUNT");
- 
+
     let mut q = sqlx::query(&query.sql);
     q = bind_values(q, &query.values);
- 
+
     let row = q.fetch_one(&*pool).await.map_err(RyxError::Database)?;
- 
+
     let count: i64 = row.try_get(0).unwrap_or_else(|_| {
         let n: i32 = row.try_get(0).unwrap_or(0);
         n as i64
     });
- 
+
     Ok(count)
 }
 
@@ -166,7 +174,6 @@ pub async fn fetch_count_compiled(node: QueryNode) -> RyxResult<i64> {
     let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
     fetch_count(compiled).await
 }
-
 
 /// Execute a SELECT and return at most one row.
 ///
@@ -194,18 +201,18 @@ pub async fn fetch_one(query: CompiledQuery) -> RyxResult<DecodedRow> {
         }
     } else {
         let pool = pool::get(query.db_alias.as_deref())?;
- 
+
         let mut q = sqlx::query(&query.sql);
         q = bind_values(q, &query.values);
- 
+
         // Limit to 2 at the executor level (the QueryNode may already have
         // LIMIT 1 set by `.first()`, but for `.get()` it doesn't).
         // We check the count in Rust rather than adding SQL complexity.
         let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
- 
+
         match rows.len() {
             0 => Err(RyxError::DoesNotExist),
-            1 => Ok(decode_row(&rows[0], None)),
+            1 => Ok(decode_row(&rows[0], None, query.base_table.as_deref())),
             _ => Err(RyxError::MultipleObjectsReturned),
         }
     }
@@ -216,7 +223,6 @@ pub async fn fetch_one_compiled(node: QueryNode) -> RyxResult<DecodedRow> {
     let compiled = ryx_query::compiler::compile(&node).map_err(RyxError::from)?;
     fetch_one(compiled).await
 }
-
 
 /// Execute an INSERT, UPDATE, or DELETE query.
 ///
@@ -254,11 +260,11 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         }
         return Err(RyxError::Internal("Transaction is no longer active".into()));
     }
- 
+
     let pool = pool::get(query.db_alias.as_deref())?;
- 
+
     debug!(sql = %query.sql, "Executing mutation");
- 
+
     // Check if this is a RETURNING query (e.g. INSERT ... RETURNING id)
     if query.sql.to_uppercase().contains("RETURNING") {
         let mut q = sqlx::query(&query.sql);
@@ -273,18 +279,17 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
             last_insert_id,
         });
     }
- 
+
     let mut q = sqlx::query(&query.sql);
     q = bind_values(q, &query.values);
- 
+
     let result = q.execute(&*pool).await.map_err(RyxError::Database)?;
- 
+
     Ok(MutationResult {
         rows_affected: result.rows_affected(),
         last_insert_id: None,
     })
 }
-
 
 /// Execute QueryNode
 #[instrument(skip(node))]
@@ -303,14 +308,30 @@ pub async fn bulk_insert(
     db_alias: Option<String>,
 ) -> RyxResult<MutationResult> {
     if rows.is_empty() {
-        return Ok(MutationResult { rows_affected: 0, last_insert_id: None });
+        return Ok(MutationResult {
+            rows_affected: 0,
+            last_insert_id: None,
+        });
     }
     let pool = pool::get(db_alias.as_deref())?;
     let backend = pool::get_backend(db_alias.as_deref())?;
 
-    let col_list = columns.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", ");
-    let row_ph = format!("({})", std::iter::repeat("?").take(columns.len()).collect::<Vec<_>>().join(", "));
-    let values_sql = std::iter::repeat(row_ph.clone()).take(rows.len()).collect::<Vec<_>>().join(", ");
+    let col_list = columns
+        .iter()
+        .map(|c| format!("\"{}\"", c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row_ph = format!(
+        "({})",
+        std::iter::repeat("?")
+            .take(columns.len())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let values_sql = std::iter::repeat(row_ph.clone())
+        .take(rows.len())
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let mut flat: SmallVec<[SqlValue; 8]> = SmallVec::new();
     for row in rows {
@@ -343,10 +364,16 @@ pub async fn bulk_insert(
     if returning_id {
         let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
         let last_insert_id = rows.first().and_then(|r| r.try_get::<i64, _>(0).ok());
-        Ok(MutationResult { rows_affected: rows.len() as u64, last_insert_id })
+        Ok(MutationResult {
+            rows_affected: rows.len() as u64,
+            last_insert_id,
+        })
     } else {
         let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
-        Ok(MutationResult { rows_affected: res.rows_affected(), last_insert_id: None })
+        Ok(MutationResult {
+            rows_affected: res.rows_affected(),
+            last_insert_id: res.last_insert_id(),
+        })
     }
 }
 
@@ -358,18 +385,24 @@ pub async fn bulk_delete(
     db_alias: Option<String>,
 ) -> RyxResult<MutationResult> {
     if pks.is_empty() {
-        return Ok(MutationResult { rows_affected: 0, last_insert_id: None });
+        return Ok(MutationResult {
+            rows_affected: 0,
+            last_insert_id: None,
+        });
     }
     let pool = pool::get(db_alias.as_deref())?;
-    let ph = std::iter::repeat("?").take(pks.len()).collect::<Vec<_>>().join(", ");
-    let sql = format!(
-        "DELETE FROM \"{}\" WHERE \"{}\" IN ({})",
-        table, pk_col, ph
-    );
+    let ph = std::iter::repeat("?")
+        .take(pks.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" IN ({})", table, pk_col, ph);
     let mut q = sqlx::query(&sql);
     q = bind_values(q, &pks);
     let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
-    Ok(MutationResult { rows_affected: res.rows_affected(), last_insert_id: None })
+    Ok(MutationResult {
+        rows_affected: res.rows_affected(),
+        last_insert_id: None,
+    })
 }
 
 /// Bulk update using CASE WHEN, values already mapped to SqlValue.
@@ -385,7 +418,10 @@ pub async fn bulk_update(
     let n = pks.len();
     let f = field_values.len();
     if n == 0 || f == 0 {
-        return Ok(MutationResult { rows_affected: 0, last_insert_id: None });
+        return Ok(MutationResult {
+            rows_affected: 0,
+            last_insert_id: None,
+        });
     }
 
     let mut case_clauses = Vec::with_capacity(f);
@@ -419,17 +455,22 @@ pub async fn bulk_update(
     let mut q = sqlx::query(&sql);
     q = bind_values(q, &all_values);
     let res = q.execute(&*pool).await.map_err(RyxError::Database)?;
-    Ok(MutationResult { rows_affected: res.rows_affected(), last_insert_id: None })
+    Ok(MutationResult {
+        rows_affected: res.rows_affected(),
+        last_insert_id: None,
+    })
 }
 
 /// Execute raw SQL without bind params.
 #[instrument(skip(sql))]
 pub async fn execute_raw(sql: String, db_alias: Option<String>) -> RyxResult<()> {
     let pool = pool::get(db_alias.as_deref())?;
-    sqlx::query(&sql).execute(&*pool).await.map_err(RyxError::Database)?;
+    sqlx::query(&sql)
+        .execute(&*pool)
+        .await
+        .map_err(RyxError::Database)?;
     Ok(())
 }
-
 
 // ###
 // Internal helpers
@@ -465,7 +506,7 @@ fn bind_values<'q>(
 }
 
 /// Decode all rows with a precomputed column-name vector to reduce per-row allocations.
-fn decode_rows(rows: &[AnyRow]) -> Vec<DecodedRow> {
+fn decode_rows(rows: &[AnyRow], base_table: Option<&str>) -> Vec<DecodedRow> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -477,11 +518,11 @@ fn decode_rows(rows: &[AnyRow]) -> Vec<DecodedRow> {
         .collect();
 
     rows.iter()
-        .map(|row| decode_row(row, Some(&col_names)))
+        .map(|row| decode_row(row, Some(&col_names), base_table))
         .collect()
 }
 
-fn decode_row(row: &AnyRow, names: Option<&Vec<String>>) -> DecodedRow {
+fn decode_row(row: &AnyRow, names: Option<&Vec<String>>, base_table: Option<&str>) -> DecodedRow {
     let mut map = HashMap::with_capacity(row.columns().len());
 
     for (idx, column) in row.columns().iter().enumerate() {
@@ -489,36 +530,88 @@ fn decode_row(row: &AnyRow, names: Option<&Vec<String>>) -> DecodedRow {
             .and_then(|n| n.get(idx).cloned())
             .unwrap_or_else(|| column.name().to_string());
 
-        let value = if let Ok(i) = row.try_get::<i64, _>(column.ordinal()) {
-            let looks_bool = name.starts_with("is_")
-                || name.starts_with("Is_")
-                || name.starts_with("IS_")
-                || name.starts_with("has_")
-                || name.starts_with("Has_")
-                || name.starts_with("HAS_")
-                || name.starts_with("can_")
-                || name.starts_with("Can_")
-                || name.starts_with("CAN_")
-                || name.ends_with("_flag")
-                || name.ends_with("_Flag")
-                || name.ends_with("_FLAG");
-            if looks_bool && (i == 0 || i == 1) {
-                SqlValue::Bool(i != 0)
-            } else {
-                SqlValue::Int(i)
-            }
-        } else if let Ok(b) = row.try_get::<bool, _>(column.ordinal()) {
-            SqlValue::Bool(b)
-        } else if let Ok(f) = row.try_get::<f64, _>(column.ordinal()) {
-            SqlValue::Float(f)
-        } else if let Ok(s) = row.try_get::<String, _>(column.ordinal()) {
-            SqlValue::Text(s)
-        } else {
-            SqlValue::Null
+        let ord = column.ordinal();
+        let value = match base_table.and_then(|t| model_registry::lookup_field(t, &name)) {
+            Some(spec) => decode_with_spec(row, ord, &spec),
+            None => decode_heuristic(row, ord, &name),
         };
 
         map.insert(name, value);
     }
 
     map
+}
+
+fn decode_with_spec(
+    row: &AnyRow,
+    ord: usize,
+    spec: &model_registry::PyFieldSpec,
+) -> SqlValue {
+    let ty = spec.data_type.as_str();
+    match ty {
+        "BooleanField" | "NullBooleanField" => row
+            .try_get::<bool, _>(ord)
+            .map(SqlValue::Bool)
+            .unwrap_or(SqlValue::Null),
+        "IntegerField" | "BigIntField" | "SmallIntField" | "AutoField" | "BigAutoField"
+        | "SmallAutoField" | "PositiveIntField" => row
+            .try_get::<i64, _>(ord)
+            .map(SqlValue::Int)
+            .unwrap_or(SqlValue::Null),
+        "FloatField" | "DecimalField" => row
+            .try_get::<f64, _>(ord)
+            .map(SqlValue::Float)
+            .unwrap_or_else(|_| {
+                row.try_get::<String, _>(ord)
+                    .map(SqlValue::Text)
+                    .unwrap_or(SqlValue::Null)
+            }),
+        "UUIDField" | "CharField" | "TextField" | "SlugField" | "EmailField" | "URLField" => row
+            .try_get::<String, _>(ord)
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        "DateTimeField" | "DateField" | "TimeField" => row
+            .try_get::<String, _>(ord)
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        "JSONField" => row
+            .try_get::<String, _>(ord)
+            .map(SqlValue::Text)
+            .unwrap_or(SqlValue::Null),
+        _ => decode_heuristic(row, ord, &spec.name),
+    }
+}
+
+fn decode_heuristic(
+    row: &AnyRow,
+    column: usize,
+    name: &str,
+) -> SqlValue {
+    if let Ok(i) = row.try_get::<i64, _>(column) {
+        let looks_bool = name.starts_with("is_")
+            || name.starts_with("Is_")
+            || name.starts_with("IS_")
+            || name.starts_with("has_")
+            || name.starts_with("Has_")
+            || name.starts_with("HAS_")
+            || name.starts_with("can_")
+            || name.starts_with("Can_")
+            || name.starts_with("CAN_")
+            || name.ends_with("_flag")
+            || name.ends_with("_Flag")
+            || name.ends_with("_FLAG");
+        if looks_bool && (i == 0 || i == 1) {
+            SqlValue::Bool(i != 0)
+        } else {
+            SqlValue::Int(i)
+        }
+    } else if let Ok(b) = row.try_get::<bool, _>(column) {
+        SqlValue::Bool(b)
+    } else if let Ok(f) = row.try_get::<f64, _>(column) {
+        SqlValue::Float(f)
+    } else if let Ok(s) = row.try_get::<String, _>(column) {
+        SqlValue::Text(s)
+    } else {
+        SqlValue::Null
+    }
 }

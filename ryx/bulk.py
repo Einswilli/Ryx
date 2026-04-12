@@ -114,19 +114,32 @@ async def bulk_create(
     pk_field = model._meta.pk_field
 
     # Process in batches — all SQL and execution handled in Rust
+    backend = _detect_backend()
     for batch in _chunked(instances, batch_size):
         rows = [[f.to_db(getattr(inst, f.attname)) for f in fields] for inst in batch]
+        # Returning IDs is expensive on SQLite/MySQL; we only request it on Postgres.
+        returning_ids = backend == "postgres"
         res = await _core.bulk_insert(
             model._meta.table_name,
             col_names,
             rows,
-            True,  # returning_id
+            returning_ids,
             ignore_conflicts,
         )
-        # On PostgreSQL/SQLite res is list of ids; on MySQL res is rows_affected
-        if pk_field and isinstance(res, list):
-            for inst, pk in zip(batch, res):
-                object.__setattr__(inst, pk_field.attname, pk)
+        if pk_field:
+            if isinstance(res, list):
+                # Returned IDs (Postgres or SQLite RETURNING)
+                for inst, pk in zip(batch, res):
+                    object.__setattr__(inst, pk_field.attname, pk)
+            elif isinstance(res, int) and backend == "sqlite":
+                # res is rows_affected; compute PKs from last_insert_rowid()
+                # This relies on SQLite's rowid continuity for multi-row inserts.
+                last_id_rows = await _core.raw_fetch("SELECT last_insert_rowid() as id", None)
+                if last_id_rows and isinstance(last_id_rows, list) and last_id_rows[0].get("id") is not None:
+                    last = int(last_id_rows[0]["id"])
+                    start = last - len(batch) + 1
+                    for offset, inst in enumerate(batch):
+                        object.__setattr__(inst, pk_field.attname, start + offset)
 
     return list(instances)
 
