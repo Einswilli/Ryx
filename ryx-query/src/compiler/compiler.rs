@@ -33,21 +33,21 @@ pub struct SqlWriter {
 }
 
 impl SqlWriter {
-    fn new_emit() -> Self {
+    pub fn new_emit() -> Self {
         Self {
             buf: String::with_capacity(256),
             emit: true,
         }
     }
 
-    fn new_no_emit() -> Self {
+    pub fn new_no_emit() -> Self {
         Self {
             buf: String::new(),
             emit: false,
         }
     }
 
-    fn fork(&self) -> Self {
+    pub fn fork(&self) -> Self {
         Self {
             buf: String::with_capacity(64),
             emit: self.emit,
