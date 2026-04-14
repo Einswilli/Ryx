@@ -39,6 +39,9 @@ pub enum RyxError {
     /// tracing/logging can capture the full details.
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
+    /// Database error with SQL context
+    #[error("Database error: {1} (sql: {0})")]
+    DatabaseWithSql(String, sqlx::Error),
 
     /// Errors from the query compiler.
     #[error("Query error: {0}")]
@@ -97,6 +100,9 @@ impl From<RyxError> for PyErr {
                 | QueryError::TypeMismatch { .. } => PyValueError::new_err(qe.to_string()),
                 QueryError::Internal(_) => PyRuntimeError::new_err(qe.to_string()),
             },
+            RyxError::DatabaseWithSql(sql, e) => {
+                PyRuntimeError::new_err(format!("Database error: {e} (sql: {sql})"))
+            }
             _ => PyRuntimeError::new_err(err.to_string()),
         }
     }

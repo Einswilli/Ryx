@@ -284,7 +284,10 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         let mut q = sqlx::query(&query.sql);
         q = bind_values(q, &query.values);
 
-        let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
+        let rows = q
+            .fetch_all(&*pool)
+            .await
+            .map_err(|e| RyxError::DatabaseWithSql(query.sql.clone(), e))?;
 
         let last_insert_id = rows.first().and_then(|row| row.try_get::<i64, _>(0).ok());
         let returned_ids: Vec<i64> = rows
@@ -302,7 +305,10 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
     let mut q = sqlx::query(&query.sql);
     q = bind_values(q, &query.values);
 
-    let result = q.execute(&*pool).await.map_err(RyxError::Database)?;
+    let result = q
+        .execute(&*pool)
+        .await
+        .map_err(|e| RyxError::DatabaseWithSql(query.sql.clone(), e))?;
 
     Ok(MutationResult {
         rows_affected: result.rows_affected(),
