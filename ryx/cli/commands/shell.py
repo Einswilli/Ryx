@@ -6,6 +6,7 @@ import sys
 
 from ryx.cli.commands.base import Command
 from ryx.cli.config import get_config
+from ryx.cli.config_context import resolve_config
 
 
 class ShellCommand(Command):
@@ -40,8 +41,9 @@ class ShellCommand(Command):
         )
 
     async def execute(self, args: argparse.Namespace) -> int:
-        config = get_config()
-        url = self._resolve_url(args, config)
+        cfg = getattr(args, "resolved_config", None) or resolve_config(args)
+        urls = cfg.urls
+        url = urls.get(getattr(args, "db", None) or cfg.db_alias, urls.get("default")) if urls else None
 
         banner = "ryx ORM interactive shell\n"
 
@@ -128,12 +130,6 @@ shell.interact()
         """Eval the query in the context of the shell namespace."""
         code = compile(query, "<query>", "eval")
         return eval(code, ns)
-
-    def _resolve_url(self, args, config) -> str:
-        url = getattr(args, "url", None)
-        if url:
-            return url
-        return config.resolve_url()
 
     def _mask_url(self, url: str) -> str:
         import re
