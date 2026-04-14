@@ -175,8 +175,16 @@ impl PyQueryBuilder {
     }
 
     fn set_using(&self, alias: String) -> PyResult<PyQueryBuilder> {
+        let backend = pool::get_backend(Some(alias.as_str()))
+            .unwrap_or(self.node.backend);
         Ok(PyQueryBuilder {
-            node: Arc::new(self.node.as_ref().clone().with_db_alias(alias)),
+            node: Arc::new(
+                self.node
+                    .as_ref()
+                    .clone()
+                    .with_db_alias(alias)
+                    .with_backend(backend),
+            ),
         })
     }
 
@@ -760,6 +768,7 @@ fn execute_with_params<'py>(
             values: sql_values.into(),
             db_alias: None,
             base_table: None,
+            backend: ryx_query::Backend::PostgreSQL,
         };
         let result = executor::execute(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(result.rows_affected.into_pyobject(py)?.unbind()))
@@ -783,6 +792,7 @@ fn fetch_with_params<'py>(
             values: sql_values.into(),
             db_alias: None,
             base_table: None,
+            backend: ryx_query::Backend::PostgreSQL,
         };
         let rows = executor::fetch_all(compiled).await.map_err(PyErr::from)?;
         Python::attach(|py| Ok(decoded_rows_to_py(py, rows)?.unbind()))
