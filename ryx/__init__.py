@@ -355,10 +355,10 @@ def _auto_setup():
         return
 
     try:
-        from ryx.queryset import run_sync
+        import asyncio
 
-        run_sync(
-            setup(
+        async def _do():
+            await setup(
                 urls,
                 max_connections=pool_cfg.get("max_conn", 10),
                 min_connections=pool_cfg.get("min_conn", 1),
@@ -366,7 +366,21 @@ def _auto_setup():
                 idle_timeout=pool_cfg.get("idle_timeout", 600),
                 max_lifetime=pool_cfg.get("max_lifetime", 1800),
             )
-        )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # In an already running loop, avoid blocking; user can call setup manually.
+            return
+        # No running loop: create a temporary loop to init pools.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_do())
+        loop.close()
+        asyncio.set_event_loop(None)
         _AUTO_INIT_DONE = True
     except Exception:
         # Fail silently to avoid breaking imports; user can call setup manually.
