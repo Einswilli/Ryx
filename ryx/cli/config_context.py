@@ -46,6 +46,8 @@ def resolve_config(args) -> ResolvedConfig:
     urls: Dict[str, str] = parse_urls_arg(getattr(args, "urls", None))
     if getattr(args, "url", None):
         urls["default"] = args.url
+        # keep backward compat with code paths expecting RYX_DATABASE_URL
+        os.environ["RYX_DATABASE_URL"] = args.url
 
     # 2) env
     env_urls = collect_env_urls()
