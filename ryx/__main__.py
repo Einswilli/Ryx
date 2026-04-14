@@ -34,12 +34,33 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from ryx.cli.config_context import resolve_config
+from ryx.queryset import run_sync
+import ryx
 
 
 def main() -> None:
     """Main entry point for `python -m ryx`."""
     parser = _build_parser()
     args = parser.parse_args()
+    cfg = resolve_config(args)
+    args.resolved_config = cfg
+
+    # Auto setup for CLI using resolved config (URLs/pool)
+    if cfg.urls:
+        try:
+            run_sync(
+                ryx.setup(
+                    cfg.urls,
+                    max_connections=cfg.pool.get("max_conn", 10),
+                    min_connections=cfg.pool.get("min_conn", 1),
+                    connect_timeout=cfg.pool.get("connect_timeout", 30),
+                    idle_timeout=cfg.pool.get("idle_timeout", 600),
+                    max_lifetime=cfg.pool.get("max_lifetime", 1800),
+                )
+            )
+        except Exception as e:
+            print(f"[WARN] auto setup failed: {e}", file=sys.stderr)
 
     if not hasattr(args, "func"):
         parser.print_help()
@@ -66,6 +87,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "-u",
         metavar="DATABASE_URL",
         help="Database URL (overrides RYX_DATABASE_URL env var)",
+    )
+    p.add_argument(
+        "--urls",
+        metavar="ALIASES",
+        help='Comma list alias=url (ex: "default=postgres://...,logs=sqlite:///app.db")',
+    )
+    p.add_argument(
+        "--db",
+        "-d",
+        metavar="ALIAS",
+        help="Database alias to use (default: default)",
     )
     p.add_argument(
         "--settings",

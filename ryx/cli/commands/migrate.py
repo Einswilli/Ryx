@@ -40,8 +40,11 @@ class MigrateCommand(Command):
         )
 
     async def execute(self, args: argparse.Namespace) -> int:
-        config = get_config()
-        urls = self._resolve_urls(args, config)
+        cfg = getattr(args, "resolved_config", None)
+        urls = cfg.urls if cfg else None
+        if not urls:
+            config = get_config()
+            urls = self._resolve_urls(args, config)
 
         if not urls:
             self._print_missing_url()
@@ -56,13 +59,13 @@ class MigrateCommand(Command):
         # Use the dictionary of URLs for multi-db setup
         await ryx.setup(urls)
 
-        models = self._load_models(getattr(args, "models", None))
+        models = self._load_models(getattr(args, "models", None) or (cfg.models if cfg else None))
         from ryx.migrations import MigrationRunner
 
         runner = MigrationRunner(
             models,
             dry_run=getattr(args, "dry_run", False),
-            alias_filter=getattr(args, "database", None),
+            alias_filter=getattr(args, "database", None) or (cfg.db_alias if cfg else None),
         )
 
         if getattr(args, "plan", False):
@@ -95,24 +98,30 @@ class MigrateCommand(Command):
             return resolved
         return None
 
-    def _load_models(self, models_module: Optional[str]) -> list:
+    def _load_models(self, models_module: Optional[str | list]) -> list:
         if not models_module:
             return []
-        try:
-            import importlib
-
-            mod = importlib.import_module(models_module)
-        except ImportError as e:
-            print(f"[ryx] Cannot import '{models_module}': {e}")
-            sys.exit(1)
-
+        modules = models_module if isinstance(models_module, list) else [models_module]
+        collected = []
         from ryx.models import Model
+        import importlib
 
-        return [
-            cls
-            for cls in vars(mod).values()
-            if isinstance(cls, type) and issubclass(cls, Model) and cls is not Model
-        ]
+        for mod_name in modules:
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError as e:
+                print(f"[ryx] Cannot import '{mod_name}': {e}")
+                sys.exit(1)
+            collected.extend(
+                [
+                    cls
+                    for cls in vars(mod).values()
+                    if isinstance(cls, type)
+                    and issubclass(cls, Model)
+                    and cls is not Model
+                ]
+            )
+        return collected
 
     def _mask_url(self, url: str) -> str:
         import re

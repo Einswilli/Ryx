@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # Import the compiled Rust extension directly to avoid circular import
 import ryx.ryx_core as _core
+import os
 
 
 # ORM core
@@ -300,3 +301,76 @@ __all__ = [
     # Version
     "__version__",
 ]
+
+# ---
+# Optional auto-initialize (can be disabled with RYX_AUTO_INITIALIZE=0|no|false|n)
+# ---
+_AUTO_INIT_DONE = False
+
+
+def _should_auto_init() -> bool:
+    return os.getenv("RYX_AUTO_INITIALIZE", "1").lower() not in ("0", "false", "n", "no")
+
+
+def _discover_urls_from_env() -> dict:
+    urls = {}
+    for key, val in os.environ.items():
+        if key.startswith("RYX_DB_") and key.endswith("_URL"):
+            alias = key.removeprefix("RYX_DB_").removesuffix("_URL").lower()
+            urls[alias] = val
+    if "default" not in urls:
+        env_url = os.environ.get("RYX_DATABASE_URL")
+        if env_url:
+            urls["default"] = env_url
+    return urls
+
+
+def _discover_config_file():
+    try:
+        from ryx.cli.config_loader import find_config_file, load_config_file
+    except Exception:
+        return {}
+    path = find_config_file()
+    if not path:
+        return {}
+    try:
+        return load_config_file(path) or {}
+    except Exception:
+        return {}
+
+
+def _auto_setup():
+    global _AUTO_INIT_DONE
+    if _AUTO_INIT_DONE or not _should_auto_init():
+        return
+
+    urls = _discover_urls_from_env()
+    pool_cfg = {}
+    cfg = _discover_config_file()
+    if cfg:
+        urls.update(cfg.get("urls", {}) or {})
+        pool_cfg = cfg.get("pool", {}) or {}
+
+    if not urls:
+        return
+
+    try:
+        from ryx.queryset import run_sync
+
+        run_sync(
+            setup(
+                urls,
+                max_connections=pool_cfg.get("max_conn", 10),
+                min_connections=pool_cfg.get("min_conn", 1),
+                connect_timeout=pool_cfg.get("connect_timeout", 30),
+                idle_timeout=pool_cfg.get("idle_timeout", 600),
+                max_lifetime=pool_cfg.get("max_lifetime", 1800),
+            )
+        )
+        _AUTO_INIT_DONE = True
+    except Exception:
+        # Fail silently to avoid breaking imports; user can call setup manually.
+        pass
+
+
+_auto_setup()

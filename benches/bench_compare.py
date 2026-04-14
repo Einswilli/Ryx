@@ -24,18 +24,19 @@ from ryx.executor_helpers import raw_fetch, raw_execute
 
 
 N = 10_000
-DEFAULT_SQLITE = "sqlite:///bench.sqlite3?mode=rwc"
+DEFAULT_SQLITE = "sqlite://bench.sqlite3?mode=rwc"
 
 
 def sa_async_url_from_env(url: str) -> str:
+    _url = url
     if url.startswith("sqlite://"):
         # sqlalchemy async driver
-        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+        _url = url.replace("sqlite://", "sqlite+aiosqlite:///", 1).removesuffix('?mode=rwc')
     if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+        _url = url.replace("postgres://", "postgresql+asyncpg://", 1)
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return url
+        _url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return _url
 
 
 class RyxItem(Model):
