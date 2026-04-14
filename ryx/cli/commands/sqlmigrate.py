@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from ryx.cli.commands.base import Command
+from ryx.cli.config_context import resolve_config
 
 
 class SqlMigrateCommand(Command):

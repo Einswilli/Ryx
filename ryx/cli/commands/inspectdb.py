@@ -5,6 +5,7 @@ import sys
 
 from ryx.cli.commands.base import Command
 from ryx.cli.config import get_config
+from ryx.cli.config_context import resolve_config
 
 
 class InspectDbCommand(Command):
@@ -29,8 +30,9 @@ class InspectDbCommand(Command):
         )
 
     async def execute(self, args: argparse.Namespace) -> int:
-        config = get_config()
-        url = self._resolve_url(args, config)
+        cfg = getattr(args, "resolved_config", None) or resolve_config(args)
+        urls = cfg.urls
+        url = urls.get(getattr(args, "db", None) or cfg.db_alias, urls.get("default")) if urls else None
 
         if not url:
             self._print_missing_url()
@@ -122,12 +124,6 @@ class InspectDbCommand(Command):
             print(output_str)
 
         return 0
-
-    def _resolve_url(self, args, config) -> str:
-        url = getattr(args, "url", None)
-        if url:
-            return url
-        return config.resolve_url()
 
     def _print_missing_url(self) -> None:
         print(

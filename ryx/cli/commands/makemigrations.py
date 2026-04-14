@@ -20,8 +20,7 @@ class MakeMigrationsCommand(Command):
         parser.add_argument(
             "--models",
             metavar="MODULE",
-            required=True,
-            help="Dotted module path containing models",
+            help="Dotted module path containing models (or use ryx.toml [models].files)",
         )
         parser.add_argument(
             "--dir",
@@ -40,9 +39,12 @@ class MakeMigrationsCommand(Command):
         )
 
     async def execute(self, args: argparse.Namespace) -> int:
-        models = self._load_models(args.models)
+        from ryx.cli.config_context import resolve_config
+
+        cfg = getattr(args, "resolved_config", None) or resolve_config(args)
+        models = self._load_models(args.models or cfg.models)
         if not models:
-            print("[ryx] No models found. Pass --models myapp.models")
+            print("[ryx] No models found. Pass --models myapp.models or set [models].files in ryx.toml")
             return 1
 
         from ryx.migrations.autodetect import Autodetector
@@ -69,22 +71,30 @@ class MakeMigrationsCommand(Command):
 
         return 0
 
-    def _load_models(self, models_module: str) -> list:
-        try:
-            import importlib
-
-            mod = importlib.import_module(models_module)
-        except ImportError as e:
-            print(f"[ryx] Cannot import '{models_module}': {e}")
-            sys.exit(1)
-
+    def _load_models(self, models_module: str | list | None) -> list:
+        if not models_module:
+            return []
+        modules = models_module if isinstance(models_module, list) else [models_module]
+        collected = []
         from ryx.models import Model
+        import importlib
 
-        return [
-            cls
-            for cls in vars(mod).values()
-            if isinstance(cls, type) and issubclass(cls, Model) and cls is not Model
-        ]
+        for mod_name in modules:
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError as e:
+                print(f"[ryx] Cannot import '{mod_name}': {e}")
+                sys.exit(1)
+            collected.extend(
+                [
+                    cls
+                    for cls in vars(mod).values()
+                    if isinstance(cls, type)
+                    and issubclass(cls, Model)
+                    and cls is not Model
+                ]
+            )
+        return collected
 
 
 # Legacy function for backward compatibility

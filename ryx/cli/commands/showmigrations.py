@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ryx.cli.commands.base import Command
 from ryx.cli.config import get_config
+from ryx.cli.config_context import resolve_config
 
 
 class ShowMigrationsCommand(Command):
@@ -38,8 +39,9 @@ class ShowMigrationsCommand(Command):
 
         # Try to check which are applied (requires DB connection)
         applied = set()
-        config = get_config()
-        url = config.resolve_url()
+        cfg = getattr(args, "resolved_config", None) or resolve_config(args)
+        urls = cfg.urls
+        url = urls.get(getattr(args, "db", None) or cfg.db_alias, urls.get("default")) if urls else None
 
         if url:
             try:

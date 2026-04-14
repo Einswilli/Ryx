@@ -6,6 +6,7 @@ import sys
 
 from ryx.cli.commands.base import Command
 from ryx.cli.config import get_config
+from ryx.cli.config_context import resolve_config
 
 
 class DbShellCommand(Command):
@@ -27,20 +28,15 @@ class DbShellCommand(Command):
         )
 
     async def execute(self, args: argparse.Namespace) -> int:
-        config = get_config()
-        url = self._resolve_url(args, config)
+        cfg = getattr(args, "resolved_config", None) or resolve_config(args)
+        urls = cfg.urls
+        url = urls.get(getattr(args, "db", None) or cfg.db_alias, urls.get("default")) if urls else None
 
         if not url:
             self._print_missing_url()
             return 1
 
         return self._run_shell(url, args)
-
-    def _resolve_url(self, args, config) -> str:
-        url = getattr(args, "url", None)
-        if url:
-            return url
-        return config.resolve_url()
 
     def _run_shell(self, url: str, args: argparse.Namespace) -> int:
         """Run the appropriate database shell."""
