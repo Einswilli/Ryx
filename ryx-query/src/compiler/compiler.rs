@@ -140,6 +140,7 @@ pub struct CompiledQuery {
     pub values: SmallVec<[SqlValue; 8]>,
     pub db_alias: Option<String>,
     pub base_table: Option<String>,
+    pub backend: Backend,
 }
 
 pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
@@ -177,6 +178,7 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
         values,
         db_alias: node.db_alias.clone(),
         base_table: Some(GLOBAL_INTERNER.resolve(node.table)),
+        backend: node.backend,
     })
 }
 

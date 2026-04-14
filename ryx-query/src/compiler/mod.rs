@@ -20,6 +20,7 @@ pub use compiler::compile_joins;
 pub use compiler::compile_order_by;
 pub use compiler::compile_q;
 pub use compiler::CompiledQuery;
+pub use compiler::SqlWriter;
 
 // Re-export from helpers.rs
 pub use helpers::apply_like_wrapping;

@@ -51,6 +51,7 @@ use ryx_query::{
     compiler::CompiledQuery,
 };
 use smallvec::SmallVec;
+use ryx_query::Backend;
 
 // ###
 // Result types
@@ -99,7 +100,8 @@ pub async fn fetch_all(query: CompiledQuery) -> RyxResult<Vec<DecodedRow>> {
 
     debug!(sql = %query.sql, "Executing SELECT");
 
-    let mut q = sqlx::query(&query.sql);
+    let sql = normalize_sql(&query);
+    let mut q = sqlx::query(&sql);
     q = bind_values(q, &query.values);
 
     let rows = q.fetch_all(&*pool).await.map_err(RyxError::Database)?;
@@ -204,7 +206,8 @@ pub async fn fetch_one(query: CompiledQuery) -> RyxResult<DecodedRow> {
     } else {
         let pool = pool::get(query.db_alias.as_deref())?;
 
-        let mut q = sqlx::query(&query.sql);
+        let sql = normalize_sql(&query);
+        let mut q = sqlx::query(&sql);
         q = bind_values(q, &query.values);
 
         // Limit to 2 at the executor level (the QueryNode may already have
@@ -280,14 +283,15 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
     debug!(sql = %query.sql, "Executing mutation");
 
     // Check if this is a RETURNING query (e.g. INSERT ... RETURNING id)
-    if query.sql.to_uppercase().contains("RETURNING") {
-        let mut q = sqlx::query(&query.sql);
+    let sql = normalize_sql(&query);
+    if sql.to_uppercase().contains("RETURNING") {
+        let mut q = sqlx::query(&sql);
         q = bind_values(q, &query.values);
 
         let rows = q
             .fetch_all(&*pool)
             .await
-            .map_err(|e| RyxError::DatabaseWithSql(query.sql.clone(), e))?;
+            .map_err(|e| RyxError::DatabaseWithSql(sql.clone(), e))?;
 
         let last_insert_id = rows.first().and_then(|row| row.try_get::<i64, _>(0).ok());
         let returned_ids: Vec<i64> = rows
@@ -302,13 +306,13 @@ pub async fn execute(query: CompiledQuery) -> RyxResult<MutationResult> {
         });
     }
 
-    let mut q = sqlx::query(&query.sql);
+    let mut q = sqlx::query(&sql);
     q = bind_values(q, &query.values);
 
     let result = q
         .execute(&*pool)
         .await
-        .map_err(|e| RyxError::DatabaseWithSql(query.sql.clone(), e))?;
+        .map_err(|e| RyxError::DatabaseWithSql(sql.clone(), e))?;
 
     Ok(MutationResult {
         rows_affected: result.rows_affected(),
@@ -558,6 +562,25 @@ fn bind_values<'q>(
         };
     }
     q
+}
+
+/// Rewrite generic `?` placeholders to PostgreSQL-style `$1, $2, ...` when needed.
+fn normalize_sql(query: &CompiledQuery) -> String {
+    if query.backend != Backend::PostgreSQL {
+        return query.sql.clone();
+    }
+    let mut out = String::with_capacity(query.sql.len() + 8);
+    let mut idx = 1;
+    for ch in query.sql.chars() {
+        if ch == '?' {
+            out.push('$');
+            out.push_str(&idx.to_string());
+            idx += 1;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Decode all rows with a precomputed column-name vector to reduce per-row allocations.
