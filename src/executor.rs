@@ -49,9 +49,9 @@ use crate::transaction;
 use ryx_query::{
     ast::{QueryNode, SqlValue},
     compiler::CompiledQuery,
+    Backend,
 };
 use smallvec::SmallVec;
-use ryx_query::Backend;
 
 // ###
 // Result types
@@ -352,13 +352,16 @@ pub async fn bulk_insert(
         .map(|c| format!("\"{}\"", c))
         .collect::<Vec<_>>()
         .join(", ");
-    let row_ph = format!(
-        "({})",
-        std::iter::repeat("?")
-            .take(columns.len())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    let mut placeholders: Vec<&str> = Vec::with_capacity(columns.len());
+    for idx in 0..columns.len() {
+        let ph = match rows.get(0).and_then(|r| r.get(idx)) {
+            Some(SqlValue::Text(s)) if is_date(s) => "CAST(? AS DATE)",
+            Some(SqlValue::Text(s)) if is_timestamp(s) => "CAST(? AS TIMESTAMP)",
+            _ => "?",
+        };
+        placeholders.push(ph);
+    }
+    let row_ph = format!("({})", placeholders.join(", "));
     let values_sql = std::iter::repeat(row_ph.clone())
         .take(rows.len())
         .collect::<Vec<_>>()
@@ -570,17 +573,33 @@ fn normalize_sql(query: &CompiledQuery) -> String {
         return query.sql.clone();
     }
     let mut out = String::with_capacity(query.sql.len() + 8);
-    let mut idx = 1;
+    let mut idx = 0usize;
     for ch in query.sql.chars() {
         if ch == '?' {
+            idx += 1;
             out.push('$');
             out.push_str(&idx.to_string());
-            idx += 1;
+            // Optional cast to help Postgres infer types when we passed text
+            if let Some(v) = query.values.get(idx - 1) {
+                match v {
+                    SqlValue::Text(s) if is_date(s) => out.push_str("::date"),
+                    SqlValue::Text(s) if is_timestamp(s) => out.push_str("::timestamp"),
+                    _ => {}
+                }
+            }
         } else {
             out.push(ch);
         }
     }
     out
+}
+
+fn is_date(s: &str) -> bool {
+    matches!(s.len(), 10) && s.chars().nth(4) == Some('-') && s.chars().nth(7) == Some('-')
+}
+
+fn is_timestamp(s: &str) -> bool {
+    s.contains(' ') && s.contains('-') && s.contains(':')
 }
 
 /// Decode all rows with a precomputed column-name vector to reduce per-row allocations.

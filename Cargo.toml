@@ -63,6 +63,7 @@ sqlx = { version = "0.8.6", features = [
 # features if they need a lighter binary.
 tokio = { version = "1.40", features = ["full"] }
 smallvec = { version = "1.13", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 # serde + serde_json: used to pass structured data between Rust and Python
