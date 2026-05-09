@@ -241,4 +241,4 @@ tests/test_compiler.rs
 # test config files
 ex.py
 ryx.toml
-libryx*
+**/libryx*
