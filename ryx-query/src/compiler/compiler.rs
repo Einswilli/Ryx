@@ -16,15 +16,15 @@ use crate::errors::{QueryError, QueryResult};
 use crate::lookups::date_lookups as date;
 use crate::lookups::json_lookups as json;
 use crate::lookups::{self, LookupContext};
-use smallvec::SmallVec;
-use once_cell::sync::Lazy;
 use crate::symbols::{GLOBAL_INTERNER, Symbol};
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use dashmap::DashMap;
 
 use super::helpers;
-pub use super::helpers::{apply_like_wrapping, qualified_col, split_qualified, KNOWN_TRANSFORMS};
+pub use super::helpers::{KNOWN_TRANSFORMS, apply_like_wrapping, qualified_col, split_qualified};
 
 /// A specialized buffer for building SQL queries with minimal allocations.
 pub struct SqlWriter {
@@ -131,8 +131,7 @@ struct CachedPlan {
     sql: String,
 }
 
-static PLAN_CACHE: Lazy<DashMap<PlanHash, CachedPlan>> =
-    Lazy::new(|| DashMap::with_capacity(1024));
+static PLAN_CACHE: Lazy<DashMap<PlanHash, CachedPlan>> = Lazy::new(|| DashMap::with_capacity(1024));
 
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
@@ -478,12 +477,11 @@ fn compile_insert(
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
 ) -> QueryResult<Vec<String>> {
-
     // Ensure values are provided and extract column names and values.
     if cols_vals.is_empty() {
         return Err(QueryError::Internal("INSERT with no values".into()));
     }
-    
+
     let (cols, vals): (Vec<_>, Vec<_>) = cols_vals.iter().cloned().unzip();
     values.extend(vals);
 
@@ -679,8 +677,7 @@ fn compile_filters(
     writer: &mut SqlWriter,
 ) -> QueryResult<()> {
     writer.write_separated(filters, " AND ", |f, w| {
-        compile_single_filter(f.field, &f.lookup, &f.value, f.negated, values, backend, w)
-            .unwrap();
+        compile_single_filter(f.field, &f.lookup, &f.value, f.negated, values, backend, w).unwrap();
     });
     Ok(())
 }
@@ -890,7 +887,7 @@ fn compile_single_filter(
                 return Err(QueryError::UnknownLookup {
                     field: field_resolved.clone(),
                     lookup: lookup.to_string(),
-                })
+                });
             }
         };
         if negated {

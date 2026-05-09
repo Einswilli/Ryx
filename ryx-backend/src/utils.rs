@@ -1,7 +1,7 @@
-use sqlx::{Column};
+use sqlx::Column;
 
-use ryx_query::ast::SqlValue;
 use ryx_core::model_registry;
+use ryx_query::ast::SqlValue;
 
 use crate::backends::DecodedRow;
 
@@ -13,10 +13,7 @@ pub fn is_timestamp(s: &str) -> bool {
     s.contains(' ') && s.contains('-') && s.contains(':')
 }
 
-pub fn decode_rows<T: sqlx::Row>(
-    rows: &[T], 
-    base_table: Option<&str>
-) -> Vec<DecodedRow> 
+pub fn decode_rows<T: sqlx::Row>(rows: &[T], base_table: Option<&str>) -> Vec<DecodedRow>
 where
     usize: sqlx::ColumnIndex<T>,
     bool: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
@@ -33,10 +30,8 @@ where
         .iter()
         .map(|c| c.name().to_string())
         .collect();
-    
-    let mapping = std::sync::Arc::new(crate::backends::RowMapping {
-        columns: col_names,
-    });
+
+    let mapping = std::sync::Arc::new(crate::backends::RowMapping { columns: col_names });
 
     rows.iter()
         .map(|row| decode_row(row, &mapping, base_table))
@@ -44,11 +39,11 @@ where
 }
 
 pub fn decode_row<T: sqlx::Row>(
-    row: &T, 
-    mapping: &std::sync::Arc<crate::backends::RowMapping>, 
-    base_table: Option<&str>
-) -> DecodedRow 
-    where
+    row: &T,
+    mapping: &std::sync::Arc<crate::backends::RowMapping>,
+    base_table: Option<&str>,
+) -> DecodedRow
+where
     usize: sqlx::ColumnIndex<T>,
     bool: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
     i64: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
@@ -83,8 +78,7 @@ where
     i64: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
     f64: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
     String: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
-    {
-
+{
     let ty = spec.data_type.as_str();
     match ty {
         "BooleanField" | "NullBooleanField" => row
@@ -120,12 +114,8 @@ where
     }
 }
 
-pub fn decode_heuristic<T: sqlx::Row>(
-    row: &T,
-    column: usize,
-    name: &str,
-) -> SqlValue 
-where 
+pub fn decode_heuristic<T: sqlx::Row>(row: &T, column: usize, name: &str) -> SqlValue
+where
     usize: sqlx::ColumnIndex<T>,
     bool: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,
     i64: sqlx::Type<T::Database> + for<'r> sqlx::Decode<'r, T::Database>,

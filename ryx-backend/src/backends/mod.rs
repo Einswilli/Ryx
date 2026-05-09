@@ -1,18 +1,18 @@
 //
 //
-pub mod postgres;
 pub mod mysql;
+pub mod postgres;
 pub mod sqlite;
 
-use ryx_core::errors::{RyxResult, RyxError};
+use ryx_core::errors::{RyxError, RyxResult};
 use ryx_query::{
-    ast::{SqlValue, QueryNode},
-    compiler::CompiledQuery
+    ast::{QueryNode, SqlValue},
+    compiler::CompiledQuery,
 };
-use sqlx::{PgConnection, MySqlConnection, SqliteConnection, Transaction, Executor};
+use sqlx::{Executor, MySqlConnection, PgConnection, SqliteConnection, Transaction};
 
 use crate::pool::{PoolStats, RyxPool};
-use crate::utils::{decode_rows};
+use crate::utils::decode_rows;
 
 /// Unified connection enum to avoid dynamic dispatch in the hot path.
 #[derive(Debug)]
@@ -34,24 +34,45 @@ pub enum RyxTransaction {
 impl RyxTransaction {
     pub async fn execute_raw(&mut self, sql: &str) -> RyxResult<()> {
         match self {
-            RyxTransaction::Postgres(tx) => tx.execute(sqlx::query::<sqlx::Postgres>(sql)).await.map_err(RyxError::Database).map(|_| ()),
-            RyxTransaction::MySql(tx) => tx.execute(sqlx::query::<sqlx::MySql>(sql)).await.map_err(RyxError::Database).map(|_| ()),
-            RyxTransaction::Sqlite(tx) => tx.execute(sqlx::query::<sqlx::Sqlite>(sql)).await.map_err(RyxError::Database).map(|_| ()),
+            RyxTransaction::Postgres(tx) => tx
+                .execute(sqlx::query::<sqlx::Postgres>(sql))
+                .await
+                .map_err(RyxError::Database)
+                .map(|_| ()),
+            RyxTransaction::MySql(tx) => tx
+                .execute(sqlx::query::<sqlx::MySql>(sql))
+                .await
+                .map_err(RyxError::Database)
+                .map(|_| ()),
+            RyxTransaction::Sqlite(tx) => tx
+                .execute(sqlx::query::<sqlx::Sqlite>(sql))
+                .await
+                .map_err(RyxError::Database)
+                .map(|_| ()),
         }
     }
 
     pub async fn fetch_raw(&mut self, sql: &str) -> RyxResult<Vec<DecodedRow>> {
         match self {
             RyxTransaction::Postgres(tx) => {
-                let rows = tx.fetch_all(sqlx::query::<sqlx::Postgres>(sql)).await.map_err(RyxError::Database)?;
+                let rows = tx
+                    .fetch_all(sqlx::query::<sqlx::Postgres>(sql))
+                    .await
+                    .map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, None))
             }
             RyxTransaction::MySql(tx) => {
-                let rows = tx.fetch_all(sqlx::query::<sqlx::MySql>(sql)).await.map_err(RyxError::Database)?;
+                let rows = tx
+                    .fetch_all(sqlx::query::<sqlx::MySql>(sql))
+                    .await
+                    .map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, None))
             }
             RyxTransaction::Sqlite(tx) => {
-                let rows = tx.fetch_all(sqlx::query::<sqlx::Sqlite>(sql)).await.map_err(RyxError::Database)?;
+                let rows = tx
+                    .fetch_all(sqlx::query::<sqlx::Sqlite>(sql))
+                    .await
+                    .map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, None))
             }
         }
@@ -61,19 +82,37 @@ impl RyxTransaction {
         match self {
             RyxTransaction::Postgres(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_pg(q, v); }
-                Ok(tx.execute(q).await.map_err(RyxError::Database)?.rows_affected())
-            },
+                for v in &query.values {
+                    q = bind_pg(q, v);
+                }
+                Ok(tx
+                    .execute(q)
+                    .await
+                    .map_err(RyxError::Database)?
+                    .rows_affected())
+            }
             RyxTransaction::MySql(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_mysql(q, v); }
-                Ok(tx.execute(q).await.map_err(RyxError::Database)?.rows_affected())
-            },
+                for v in &query.values {
+                    q = bind_mysql(q, v);
+                }
+                Ok(tx
+                    .execute(q)
+                    .await
+                    .map_err(RyxError::Database)?
+                    .rows_affected())
+            }
             RyxTransaction::Sqlite(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_sqlite(q, v); }
-                Ok(tx.execute(q).await.map_err(RyxError::Database)?.rows_affected())
-            },
+                for v in &query.values {
+                    q = bind_sqlite(q, v);
+                }
+                Ok(tx
+                    .execute(q)
+                    .await
+                    .map_err(RyxError::Database)?
+                    .rows_affected())
+            }
         }
     }
 
@@ -81,28 +120,37 @@ impl RyxTransaction {
         match self {
             RyxTransaction::Postgres(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_pg(q, v); }
+                for v in &query.values {
+                    q = bind_pg(q, v);
+                }
                 let rows = tx.fetch_all(q).await.map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, query.base_table.as_deref()))
-            },
+            }
             RyxTransaction::MySql(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_mysql(q, v); }
+                for v in &query.values {
+                    q = bind_mysql(q, v);
+                }
                 let rows = tx.fetch_all(q).await.map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, query.base_table.as_deref()))
-            },
+            }
             RyxTransaction::Sqlite(tx) => {
                 let mut q = sqlx::query(&query.sql);
-                for v in &query.values { q = bind_sqlite(q, v); }
+                for v in &query.values {
+                    q = bind_sqlite(q, v);
+                }
                 let rows = tx.fetch_all(q).await.map_err(RyxError::Database)?;
                 Ok(decode_rows(&rows, query.base_table.as_deref()))
-            },
+            }
         }
     }
 }
 
 // Binding helpers
-fn bind_pg<'q>(q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, v: &'q SqlValue) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+fn bind_pg<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    v: &'q SqlValue,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
     match v {
         SqlValue::Null => q.bind(None::<String>),
         SqlValue::Bool(b) => q.bind(*b),
@@ -113,7 +161,10 @@ fn bind_pg<'q>(q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArgum
     }
 }
 
-fn bind_mysql<'q>(q: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, v: &'q SqlValue) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
+fn bind_mysql<'q>(
+    q: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
+    v: &'q SqlValue,
+) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
     match v {
         SqlValue::Null => q.bind(None::<String>),
         SqlValue::Bool(b) => q.bind(*b),
@@ -124,7 +175,10 @@ fn bind_mysql<'q>(q: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArgum
     }
 }
 
-fn bind_sqlite<'q>(q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, v: &'q SqlValue) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+fn bind_sqlite<'q>(
+    q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    v: &'q SqlValue,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
     match v {
         SqlValue::Null => q.bind(None::<String>),
         SqlValue::Bool(b) => q.bind(*b),
@@ -197,7 +251,11 @@ pub struct RowView {
 
 impl RowView {
     pub fn get(&self, name: &str) -> Option<&ryx_query::ast::SqlValue> {
-        self.mapping.columns.iter().position(|c| c == name).and_then(|idx| self.values.get(idx))
+        self.mapping
+            .columns
+            .iter()
+            .position(|c| c == name)
+            .and_then(|idx| self.values.get(idx))
     }
 }
 

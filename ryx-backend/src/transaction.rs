@@ -31,8 +31,8 @@ use tokio::sync::Mutex;
 use ryx_core::errors::{RyxError, RyxResult};
 use ryx_query::compiler::CompiledQuery;
 
-use crate::pool;
 use crate::backends::{RowView, RyxBackend, RyxTransaction};
+use crate::pool;
 
 static ACTIVE_TX: OnceCell<StdMutex<Option<Arc<Mutex<Option<TransactionHandle>>>>>> =
     OnceCell::new();
@@ -107,13 +107,15 @@ impl TransactionHandle {
 
     /// Roll back to a named savepoint.
     pub async fn rollback_to(&self, name: &str) -> RyxResult<()> {
-        self.execute_raw(&format!("ROLLBACK TO SAVEPOINT {name}")).await?;
+        self.execute_raw(&format!("ROLLBACK TO SAVEPOINT {name}"))
+            .await?;
         Ok(())
     }
 
     /// Release (drop) a named savepoint.
     pub async fn release_savepoint(&self, name: &str) -> RyxResult<()> {
-        self.execute_raw(&format!("RELEASE SAVEPOINT {name}")).await?;
+        self.execute_raw(&format!("RELEASE SAVEPOINT {name}"))
+            .await?;
         Ok(())
     }
 
@@ -136,10 +138,7 @@ impl TransactionHandle {
     }
 
     /// Fetch rows within this transaction.
-    pub async fn fetch_query(
-        &self,
-        query: CompiledQuery,
-    ) -> RyxResult<Vec<RowView>> {
+    pub async fn fetch_query(&self, query: CompiledQuery) -> RyxResult<Vec<RowView>> {
         let mut guard = self.inner.lock().await;
         let tx = guard.as_mut().ok_or_else(|| {
             RyxError::Internal("Transaction already committed or rolled back".into())

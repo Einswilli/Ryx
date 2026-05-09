@@ -27,23 +27,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use sqlx::{
-    postgres::PgPool,
-    mysql::MySqlPool,
-    sqlite::SqlitePool,
-    any::install_default_drivers,
-};
+use sqlx::{any::install_default_drivers, mysql::MySqlPool, postgres::PgPool, sqlite::SqlitePool};
 use tracing::{debug, info};
 
-use ryx_query::{Backend};
+use ryx_query::Backend;
 
-use ryx_core::errors::{RyxError, RyxResult};
 use crate::backends::{
-    RyxBackend, 
-    postgres::PostgresBackend, 
-    mysql::MySqlBackend, 
-    sqlite::SqliteBackend
+    RyxBackend, mysql::MySqlBackend, postgres::PostgresBackend, sqlite::SqliteBackend,
 };
+use ryx_core::errors::{RyxError, RyxResult};
 
 fn to_static<T: sqlx::Database>(tx: sqlx::Transaction<'_, T>) -> sqlx::Transaction<'static, T> {
     // SAFETY: transactions are tied to the process-lifetime pool. Extending the
@@ -65,15 +57,15 @@ impl RyxPool {
             RyxPool::Postgres(pool) => {
                 let tx = pool.begin().await.map_err(RyxError::Database)?;
                 Ok(crate::backends::RyxTransaction::Postgres(to_static(tx)))
-            },
+            }
             RyxPool::MySQL(pool) => {
                 let tx = pool.begin().await.map_err(RyxError::Database)?;
                 Ok(crate::backends::RyxTransaction::MySql(to_static(tx)))
-            },
+            }
             RyxPool::SQLite(pool) => {
                 let tx = pool.begin().await.map_err(RyxError::Database)?;
                 Ok(crate::backends::RyxTransaction::Sqlite(to_static(tx)))
-            },
+            }
         }
     }
 }
@@ -182,11 +174,11 @@ pub async fn initialize(
             Backend::PostgreSQL => {
                 let b = PostgresBackend::new(config.clone(), url.clone()).await;
                 (Arc::new(b), db_backend)
-            },
+            }
             Backend::MySQL => {
                 let b = MySqlBackend::new(config.clone(), url.clone()).await;
                 (Arc::new(b), db_backend)
-            },
+            }
             Backend::SQLite => {
                 let b = SqliteBackend::new(config.clone(), url.clone()).await;
                 (Arc::new(b), db_backend)

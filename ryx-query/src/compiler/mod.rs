@@ -14,17 +14,17 @@ pub mod compiler;
 pub mod helpers;
 
 // Re-export from compiler.rs
+pub use compiler::CompiledQuery;
+pub use compiler::SqlWriter;
 pub use compiler::compile;
 pub use compiler::compile_agg_cols;
 pub use compiler::compile_joins;
 pub use compiler::compile_order_by;
 pub use compiler::compile_q;
-pub use compiler::CompiledQuery;
-pub use compiler::SqlWriter;
 
 // Re-export from helpers.rs
+pub use helpers::KNOWN_TRANSFORMS;
 pub use helpers::apply_like_wrapping;
 pub use helpers::qualified_col;
 pub use helpers::quote_col;
 pub use helpers::split_qualified;
-pub use helpers::KNOWN_TRANSFORMS;

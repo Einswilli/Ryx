@@ -1,9 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ryx_query::ast::{QNode, QueryNode, QueryOperation, SqlValue};
-use ryx_query::compiler::{compile, compile_q};
-use ryx_query::compiler::compiler::SqlWriter;
-use ryx_query::lookups::init_registry;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use ryx_query::Backend;
+use ryx_query::ast::{QNode, QueryNode, QueryOperation, SqlValue};
+use ryx_query::compiler::compiler::SqlWriter;
+use ryx_query::compiler::{compile, compile_q};
+use ryx_query::lookups::init_registry;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Note: Criterion uses a different API for grouping.

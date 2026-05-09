@@ -49,7 +49,6 @@ impl Interner {
     pub fn resolve(&self, sym: Symbol) -> String {
         self.vec.read().unwrap()[sym.0 as usize].clone()
     }
-
 }
 
 pub static GLOBAL_INTERNER: Lazy<Interner> = Lazy::new(Interner::new);
