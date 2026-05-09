@@ -56,7 +56,7 @@ impl SqliteBackend {
     /// ```
     /// let tx = backend.begin().await.unwrap();
     ///
-    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<sqlx::Sqlite>> {
+    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<'_, sqlx::Sqlite>> {
         self.pool.begin().await.map_err(RyxError::Database)
     }
 

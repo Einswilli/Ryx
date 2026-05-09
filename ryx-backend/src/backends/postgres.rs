@@ -59,7 +59,7 @@ impl PostgresBackend {
     /// ```
     /// let tx = backend.begin().await.unwrap();
     /// ```
-    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<sqlx::Postgres>> {
+    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<'_, sqlx::Postgres>> {
         self.pool.begin().await.map_err(RyxError::Database)
     }
 

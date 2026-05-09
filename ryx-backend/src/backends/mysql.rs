@@ -56,7 +56,7 @@ impl MySqlBackend {
     /// ```
     /// let tx = backend.begin().await.unwrap();
     ///
-    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<sqlx::MySql>> {
+    pub async fn begin(&self) -> RyxResult<sqlx::Transaction<'_, sqlx::MySql>> {
         self.pool.begin().await.map_err(RyxError::Database)
     }
 
