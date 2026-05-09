@@ -36,7 +36,7 @@ DB_PATH = Path(__file__).parent.parent / "ryx_bench.sqlite3"
 DATABASE_URL = f"sqlite://{DB_PATH}?mode=rwc"
 os.environ["RYX_DATABASE_URL"] = DATABASE_URL
 
-N = 1000  # Number of rows for bulk operations
+N = 10_000  # Number of rows for bulk operations
 
 
 #
@@ -85,7 +85,9 @@ async def bench_ryx_orm() -> dict:
     print("Ryx ORM")
     print("=" * 60)
 
-    await ryx.setup(DATABASE_URL)
+    if not ryx.is_connected():
+        await ryx.setup(DATABASE_URL)
+
     runner = MigrationRunner([RyxItem])
     await runner.migrate()
 
@@ -107,7 +109,7 @@ async def bench_ryx_orm() -> dict:
 
     # 2. Filtered query
     with timed("filter + order + limit") as t:
-        await RyxItem.objects.filter(category="A", is_active=1).order_by("-price")[:50]
+        await RyxItem.objects.filter(category="A", is_active=1).order_by("-price").limit(50) # Or [:50]
     results["filter_query"] = t.elapsed
 
     # 3. Aggregate

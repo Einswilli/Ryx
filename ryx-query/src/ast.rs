@@ -1,6 +1,7 @@
 //
 // ###
 // Ryx — Query Abstract Syntax Tree (AST)
+// ###
 //
 // Supports the full range of QuerySet features, including filters, joins, aggregates:
 //   - Added AggregateExpr  (COUNT, SUM, AVG, MIN, MAX, GROUP BY)
@@ -13,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Backend;
+use crate::symbols::Symbol;
 
 // ###
 // SqlValue — a Python-safe, DB-bindable value
@@ -68,7 +70,7 @@ impl SqlValue {
 pub enum QNode {
     /// A single filter condition (leaf of the tree).
     Leaf {
-        field: String,
+        field: Symbol,
         lookup: String,
         value: SqlValue,
         negated: bool,
@@ -86,7 +88,7 @@ pub enum QNode {
 //
 #[derive(Debug, Clone)]
 pub struct FilterNode {
-    pub field: String,
+    pub field: Symbol,
     pub lookup: String,
     pub value: SqlValue,
     /// If true the condition is wrapped in NOT(...). Set by `.exclude()`.
@@ -97,7 +99,7 @@ pub struct FilterNode {
 // JoinClause
 //
 /// The kind of SQL JOIN to emit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -121,9 +123,9 @@ pub enum JoinKind {
 pub struct JoinClause {
     pub kind: JoinKind,
     /// The table to join.
-    pub table: String,
+    pub table: Symbol,
     /// Optional alias for the joined table (used in ON / SELECT columns).
-    pub alias: Option<String>,
+    pub alias: Option<Symbol>,
     /// Left-hand side of the ON condition: "table.column" or just "column".
     pub on_left: String,
     /// Right-hand side of the ON condition.
@@ -172,11 +174,11 @@ impl AggFunc {
 #[derive(Debug, Clone)]
 pub struct AggregateExpr {
     /// The Python-side name (key in the returned dict).
-    pub alias: String,
+    pub alias: Symbol,
     /// The aggregate function.
     pub func: AggFunc,
     /// The column to aggregate. `"*"` is valid only for COUNT.
-    pub field: String,
+    pub field: Symbol,
     /// If true: COUNT(DISTINCT col) / SUM(DISTINCT col).
     pub distinct: bool,
 }
@@ -184,7 +186,7 @@ pub struct AggregateExpr {
 //
 // OrderByClause
 //
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SortDirection {
     Asc,
     Desc,
@@ -192,7 +194,7 @@ pub enum SortDirection {
 
 #[derive(Debug, Clone)]
 pub struct OrderByClause {
-    pub field: String,
+    pub field: Symbol,
     pub direction: SortDirection,
 }
 
@@ -201,12 +203,12 @@ impl OrderByClause {
     pub fn parse(s: &str) -> Self {
         if let Some(f) = s.strip_prefix('-') {
             Self {
-                field: f.to_string(),
+                field: f.into(),
                 direction: SortDirection::Desc,
             }
         } else {
             Self {
-                field: s.to_string(),
+                field: s.into(),
                 direction: SortDirection::Asc,
             }
         }
@@ -221,7 +223,7 @@ pub enum QueryOperation {
     /// Regular SELECT — returns rows.
     Select {
         /// None → SELECT *. Some(cols) → SELECT col1, col2, ...
-        columns: Option<Vec<String>>,
+        columns: Option<Vec<Symbol>>,
     },
     /// Aggregate-only SELECT — returns a single row of aggregated values.
     /// Used by `.aggregate(total=Sum("views"))`.
@@ -230,10 +232,10 @@ pub enum QueryOperation {
     Count,
     Delete,
     Update {
-        assignments: Vec<(String, SqlValue)>,
+        assignments: Vec<(Symbol, SqlValue)>,
     },
     Insert {
-        values: Vec<(String, SqlValue)>,
+        values: Vec<(Symbol, SqlValue)>,
         returning_id: bool,
     },
 }
@@ -252,7 +254,7 @@ pub enum QueryOperation {
 ///   - `having`      : HAVING conditions (flat list, AND-ed, same as filters)
 #[derive(Debug, Clone)]
 pub struct QueryNode {
-    pub table: String,
+    pub table: Symbol,
     pub backend: Backend,         // Database backend for SQL generation
     pub db_alias: Option<String>, // Optional alias for multi-db routing
     pub operation: QueryOperation,
@@ -271,7 +273,7 @@ pub struct QueryNode {
     /// Aggregate expressions added by `.annotate()` or `.aggregate()`.
     pub annotations: Vec<AggregateExpr>,
     /// GROUP BY columns (from `.values("field")` combined with aggregate).
-    pub group_by: Vec<String>,
+    pub group_by: Vec<Symbol>,
     /// HAVING conditions — same format as filters, applied after GROUP BY.
     pub having: Vec<FilterNode>,
 
@@ -284,7 +286,7 @@ pub struct QueryNode {
 
 impl QueryNode {
     /// Base SELECT * for a table. Starting point for every QuerySet.
-    pub fn select(table: impl Into<String>) -> Self {
+    pub fn select(table: impl Into<Symbol>) -> Self {
         Self {
             table: table.into(),
             backend: Backend::PostgreSQL, // default, will be overridden at runtime
@@ -303,13 +305,13 @@ impl QueryNode {
         }
     }
 
-    pub fn count(table: impl Into<String>) -> Self {
+    pub fn count(table: impl Into<Symbol>) -> Self {
         let mut n = Self::select(table);
         n.operation = QueryOperation::Count;
         n
     }
 
-    pub fn delete(table: impl Into<String>) -> Self {
+    pub fn delete(table: impl Into<Symbol>) -> Self {
         let mut n = Self::select(table);
         n.operation = QueryOperation::Delete;
         n
@@ -345,8 +347,8 @@ impl QueryNode {
     }
 
     #[must_use]
-    pub fn with_group_by(mut self, field: String) -> Self {
-        self.group_by.push(field);
+    pub fn with_group_by(mut self, field: impl Into<Symbol>) -> Self {
+        self.group_by.push(field.into());
         self
     }
 

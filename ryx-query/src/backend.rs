@@ -2,11 +2,21 @@ use serde::{Deserialize, Serialize};
 
 /// Database backend type.
 /// Used for backend-specific SQL generation (e.g., DATE() vs strftime()).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Backend {
     PostgreSQL,
     MySQL,
     SQLite,
+}
+
+impl Backend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Backend::PostgreSQL => "postgres",
+            Backend::MySQL => "mysql",
+            Backend::SQLite => "sqlite",
+        }
+    }
 }
 
 /// Detect the backend from a database URL.
