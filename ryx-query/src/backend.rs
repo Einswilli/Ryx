@@ -9,6 +9,16 @@ pub enum Backend {
     SQLite,
 }
 
+impl Backend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Backend::PostgreSQL => "postgres",
+            Backend::MySQL => "mysql",
+            Backend::SQLite => "sqlite",
+        }
+    }
+}
+
 /// Detect the backend from a database URL.
 pub fn detect_backend(url: &str) -> Backend {
     let url_lower = url.to_lowercase();

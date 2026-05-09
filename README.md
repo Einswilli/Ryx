@@ -15,10 +15,22 @@
   <a href="https://github.com/AllDotPy/Ryx/releases"><img src="https://img.shields.io/pypi/v/ryx?style=for-the-badge" alt="Version" /></a>
   <a href="https://github.com/AllDotPy/Ryx/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" /></a>
   <a href="https://github.com/rust-lang/rust"><img src="https://img.shields.io/badge/rust-1.93%2B-orange?style=for-the-badge&logo=rust" alt="Rust 1.83+" /></a>
+  <!-- Discord -->
+  <a href="https://discord.gg/umDhd5HWgS">
+        <img src="https://img.shields.io/discord/1452761060678303909?style=flat-square&logo=discord" alt="Discord" />
+    </a>
 </p>
 
 <p align="center">
   <a href="https://github.com/AllDotPy/Ryx/stargazers"><img src="https://img.shields.io/github/stars/AllDotPy/Ryx?style=social" alt="GitHub stars" /></a>
+</p>
+
+<p align="center">
+    <a href="#-quick-start">Quick Start</a> •
+    <a href="#-features">Features</a> •
+    <a href="#-showcase">Showcase</a> •
+    <a href="https://ryx.alldotpy.com">Docs</a> •
+    <a href="https://discord.gg/umDhd5HWgS">Discord</a>
 </p>
 
 ---

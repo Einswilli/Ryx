@@ -1,51 +1,38 @@
-[package]
-name = "Ryx"
-version = "0.1.2"
+[workspace]
+members = [
+    "ryx-core",
+    "ryx-backend",
+    "ryx-query",
+    "ryx-python",
+]
+
+resolver = "2"
+
+[workspace.package]
+name = "ryx"
+version = "0.1.0"
 edition = "2024"
-description = "Ryx ORM — a Django-style Python ORM powered by sqlx (Rust) via PyO3"
+authors = ["AllDotPy", "Ryx Contributors"]
 license = "MIT OR Apache-2.0"
-authors = ["Wilfried GOEH", "AllDotPy", "Ryx Contributors"]
+repository = "https://github.com/AllDotPy/Ryx"
+homepage = "https://github.com/AllDotPy/Ryx"
+documentation = "https://docs.rs/Ryx"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# The crate is compiled as a C dynamic library so that Python can import it.
-# "cdylib"  → produces a .so / .pyd file that maturin renames to ryx_core.so
-# We also keep "rlib" so that internal Rust tests (cargo test) can link against
-# the library without needing a Python interpreter.
-# ──────────────────────────────────────────────────────────────────────────────
-[lib]
-name       = "ryx_core"
-crate-type = ["cdylib", "rlib"]
+[workspace.dependencies]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Feature flags
-#
-# Each database backend is opt-in so users only compile what they need.
-# Default: postgres only, which is the most common production choice.
-#
-# Usage in Cargo.toml:
-#   ryx = { version = "0.1", features = ["sqlite", "mysql"] }
-# ──────────────────────────────────────────────────────────────────────────────
-[features]
-default = ["postgres", "mysql", "sqlite"]  # enable all backends by default for dev convenience
-postgres = ["sqlx/postgres"]
-mysql = ["sqlx/mysql"]
-sqlite = ["sqlx/sqlite"]
-
-[dependencies]
-ryx-query = { path = "./ryx-query" }
-# ── PyO3 ──────────────────────────────────────────────────────────────────────
+# PyO3 
 # "extension-module" is required when building a cdylib for Python import.
 # Without it, PyO3 tries to link against libpython, which breaks on Linux/macOS
 # when Python dynamically loads the extension.
 pyo3 = { version = "0.28.3", features = ["extension-module"] }
 
-# ── Async bridge ──────────────────────────────────────────────────────────────
+# Async bridge 
 # pyo3-async-runtimes is the maintained successor of the abandoned pyo3-asyncio.
 # The "tokio-runtime" feature wires Rust Futures into Python's asyncio event
 # loop via tokio — users simply `await` our ORM calls from Python.
 pyo3-async-runtimes = { version = "0.28.0", features = ["attributes", "async-std-runtime", "tokio-runtime"] }
 
-# ── sqlx ──────────────────────────────────────────────────────────────────────
+# sqlx 
 # We use sqlx 0.8.x (stable). The "runtime-tokio" feature is mandatory since
 # we drive everything through tokio. "macros" enables the query!/query_as!
 # macros if needed later. "chrono" adds DateTime support.
@@ -55,23 +42,26 @@ sqlx = { version = "0.8.6", features = [
     "chrono",
     "uuid",
     "json",
-    "any"
+    "any",
+    "postgres",
+    "mysql",
+    "sqlite"
 ], default-features = false }
 
-# ── Tokio ─────────────────────────────────────────────────────────────────────
+# Tokio
 # Full tokio runtime. "full" is fine for a library crate — callers can restrict
 # features if they need a lighter binary.
 tokio = { version = "1.40", features = ["full"] }
 smallvec = { version = "1.13", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
-# ── Serialization ─────────────────────────────────────────────────────────────
+# Serialization
 # serde + serde_json: used to pass structured data between Rust and Python
 # (row data, query parameters, etc.)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# Utilities
 # thiserror: ergonomic error type derivation. We define a rich BityaError type
 # that converts cleanly into Python exceptions via PyO3's IntoPy trait.
 thiserror = "2"
@@ -86,11 +76,18 @@ once_cell = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# ──────────────────────────────────────────────────────────────────────────────
+
+[workspace.dev-dependencies]
+# tokio test macro for async unit tests
+tokio = { version = "1.40", features = ["full", "test-util"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+
+#
 # Profiles — favor peak perf in release builds (used by maturin/pip wheels).
 # LTO thin keeps link times reasonable while enabling cross-crate inlining.
 # codegen-units=1 avoids missed inlining across crates.
-# ──────────────────────────────────────────────────────────────────────────────
+#
 [profile.release]
 lto = "thin"
 codegen-units = 1
@@ -98,7 +95,6 @@ opt-level = 3
 strip = "debuginfo"
 panic = "unwind"
 
-[dev-dependencies]
-# tokio test macro for async unit tests
-tokio = { version = "1.40", features = ["full", "test-util"] }
-criterion = { version = "0.5", features = ["async_tokio"] }
+[profile.dev]
+opt-level = 3
+debug = true

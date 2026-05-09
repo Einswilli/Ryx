@@ -1,3 +1,7 @@
+# Editors
+.vscode/*
+.idea/*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -233,3 +237,7 @@ libryx_core*
 *.lock
 tests/test_compiler.rs
 *.txt
+
+# test config files
+ex.py
+ryx.toml

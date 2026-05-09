@@ -50,7 +50,6 @@ impl Interner {
         self.vec.read().unwrap()[sym.0 as usize].clone()
     }
 
-    // Removed resolve_ref as it returned a reference to a temporary RwLockReadGuard
 }
 
 pub static GLOBAL_INTERNER: Lazy<Interner> = Lazy::new(Interner::new);

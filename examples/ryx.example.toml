@@ -1,32 +1,22 @@
 # Example ryx configuration file (TOML format)
 # Copy to ryx.toml in your project root
 
-[database]
-url = "sqlite:///dev.db"
+[urls]
+default = "sqlite:///Users/einswilli/Documents/projects/AllDotPy/Ryx/test_db.sqlite3?mode=rwc"
+replica = "postgres://ryx_test:12345@localhost:5432/test_ryx"
+logs = "sqlite:///Users/einswilli/Documents/projects/AllDotPy/Ryx/logs.db?mode=rwc"
+# replica = "postgres://repl:replpass@replica-host:5432/appdb"
 
-[database.pool]
-max_connections = 5
-min_connections = 1
-connect_timeout = 10
-idle_timeout = 300
-max_lifetime = 900
+[pool]
+max_conn = 12
+min_conn = 2
+connect_timeout = 30
+idle_timeout = 600
+max_lifetime = 1800
 
-[debug]
-verbose = true
-
-# Environment-specific configs:
-# Use --env prod to activate the [prod] section
-# Values in environment sections override base values
-
-[dev]
-database.url = "sqlite:///dev.db"
-debug.verbose = true
-
-[test]
-database.url = "sqlite:///test.db"
-database.pool.max_connections = 2
-
-[prod]
-database.url = "postgres://user:pass@prod-server/mydb"
-database.pool.max_connections = 20
-database.pool.min_connections = 5
+[models]
+files = [
+  "user_app/models.py",
+  "order_app/models.py",
+  "billing_app/models/*"
+]

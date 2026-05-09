@@ -140,17 +140,20 @@ pub struct CompiledQuery {
     pub values: SmallVec<[SqlValue; 8]>,
     pub db_alias: Option<String>,
     pub base_table: Option<String>,
+    pub column_names: Option<Vec<String>>,
     pub backend: Backend,
 }
 
 pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
     let mut values: SmallVec<[SqlValue; 8]> = SmallVec::new();
     let plan_hash = compute_plan_hash(node);
+    let mut node_column_names: Option<Vec<String>> = None;
     let mut writer = if PLAN_CACHE.contains_key(&plan_hash) {
         SqlWriter::new_no_emit()
     } else {
         SqlWriter::new_emit()
     };
+
     match &node.operation {
         QueryOperation::Select { columns } => {
             compile_select(node, columns.as_deref(), &mut values, &mut writer)?;
@@ -159,16 +162,23 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
         QueryOperation::Count => compile_count(node, &mut values, &mut writer)?,
         QueryOperation::Delete => compile_delete(node, &mut values, &mut writer)?,
         QueryOperation::Update { assignments } => {
-            compile_update(node, assignments, &mut values, &mut writer)?
+            let cols = compile_update(node, assignments, &mut values, &mut writer)?;
+            node_column_names = Some(cols);
         }
         QueryOperation::Insert {
             values: cv,
             returning_id,
-        } => compile_insert(node, cv, *returning_id, &mut values, &mut writer)?,
+        } => {
+            let cols = compile_insert(node, cv, *returning_id, &mut values, &mut writer)?;
+            node_column_names = Some(cols);
+        }
     };
+
+    // Now get the sql from the cache if exixts
     let sql = if let Some(cached) = PLAN_CACHE.get(&plan_hash) {
         cached.sql.clone()
     } else {
+        // Save final sql to the cache.
         let sql = writer.finish();
         PLAN_CACHE.insert(plan_hash, CachedPlan { sql: sql.clone() });
         sql
@@ -178,6 +188,7 @@ pub fn compile(node: &QueryNode) -> QueryResult<CompiledQuery> {
         values,
         db_alias: node.db_alias.clone(),
         base_table: Some(GLOBAL_INTERNER.resolve(node.table)),
+        column_names: node_column_names,
         backend: node.backend,
     })
 }
@@ -432,7 +443,7 @@ fn compile_update(
     assignments: &[(Symbol, SqlValue)],
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
-) -> QueryResult<()> {
+) -> QueryResult<Vec<String>> {
     if assignments.is_empty() {
         return Err(QueryError::Internal("UPDATE with no assignments".into()));
     }
@@ -441,9 +452,12 @@ fn compile_update(
     writer.write_quote(&table_resolved);
     writer.write(" SET ");
 
+    let mut cols_out: Vec<String> = Vec::with_capacity(assignments.len());
     writer.write_comma_separated(assignments, |(col, val), w| {
         values.push(val.clone());
-        w.write_symbol(*col);
+        let resolved = GLOBAL_INTERNER.resolve(*col);
+        cols_out.push(resolved.clone());
+        w.write_quote(&resolved);
         w.write(" = ?");
     });
 
@@ -454,7 +468,7 @@ fn compile_update(
         node.backend,
         writer,
     )?;
-    Ok(())
+    Ok(cols_out)
 }
 
 fn compile_insert(
@@ -463,10 +477,13 @@ fn compile_insert(
     returning_id: bool,
     values: &mut SmallVec<[SqlValue; 8]>,
     writer: &mut SqlWriter,
-) -> QueryResult<()> {
+) -> QueryResult<Vec<String>> {
+
+    // Ensure values are provided and extract column names and values.
     if cols_vals.is_empty() {
         return Err(QueryError::Internal("INSERT with no values".into()));
     }
+    
     let (cols, vals): (Vec<_>, Vec<_>) = cols_vals.iter().cloned().unzip();
     values.extend(vals);
 
@@ -486,7 +503,8 @@ fn compile_insert(
     if returning_id {
         writer.write(" RETURNING id");
     }
-    Ok(())
+    let cols_resolved: Vec<String> = cols.iter().map(|s| GLOBAL_INTERNER.resolve(*s)).collect();
+    Ok(cols_resolved)
 }
 
 pub fn compile_joins(joins: &[JoinClause], writer: &mut SqlWriter) {
