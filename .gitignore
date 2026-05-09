@@ -235,7 +235,7 @@ ROADMAP*.md
 
 libryx_core*
 *.lock
-tests/test_compiler.rs
+**/tests/test_compiler.rs
 *.txt
 
 # test config files
